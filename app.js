@@ -21,6 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
+const APP_VER=25;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -328,6 +329,12 @@ function renderSettings(){
     <p class="note2">Data jsou jen v tomto telefonu. Občas si udělej zálohu, stejně tak před smazáním appky nebo při výměně telefonu.</p>
     <div class="actions"><button data-a="export">Uložit zálohu (soubor)</button><label class="btn" style="position:relative">Načíst zálohu<input type="file" accept=".json,application/json" data-import style="position:absolute;inset:0;opacity:0"></label></div>
     <p class="status" id="bst"></p><p class="note2" id="sinfo"></p>
+  </div></div>
+  <div class="card"><div class="pad">
+    <b>Aktualizace aplikace</b>
+    <p class="note2">Máš verzi <b>${APP_VER}</b>. Tlačítko stáhne nejnovější verzi a appku restartuje. Účtenky, dluhy, klíč ani nastavení se nesmažou.</p>
+    <div class="actions"><button class="pri" data-a="reboot">Aktualizovat a restartovat</button></div>
+    <p class="status" id="rbst"></p>
   </div></div>
   <div class="card"><div class="pad">
     <b>Log běhu (pro hledání chyb)</b>
@@ -1032,6 +1039,7 @@ app.addEventListener('click',e=>{
   if(a==='copysum'){copy(summaryText(receipts.filter(byFilter)));return}
   if(a==='delr'){ask('Smazat účtenku?',`Účtenka „${r.name||'Bez jména'}“ ${kc(totR(r)[1])} i její fotky se smažou natrvalo.`,'Ano, smazat',async()=>{receipts=receipts.filter(x=>x.id!==r.id);try{await tx('receipts','readwrite',s=>s.delete(r.id))}catch(e){}for(const p of r.photos||[])await delPhotoData(p.id);view='list';render();toast('Účtenka smazána')});return}
   if(a==='delphoto'){ask('Smazat fotku?','Fotka se smaže natrvalo. Řádky zůstanou, jen bez vyznačení na fotce.','Smazat',async()=>{const p=r.photos[curPhoto];r.photos=r.photos.filter((_,i)=>i!==curPhoto);r.rows=rowsOf(r).map(x=>{if((x.ph||0)===curPhoto)return{...x,box:null,spots:[]};if((x.ph||0)>curPhoto)return{...x,ph:x.ph-1};return x});if(p)await delPhotoData(p.id);curPhoto=0;save(r);render()});return}
+  if(a==='reboot'){reboot();return}
   if(a==='addfix'){const f=num($('fxf').value),t=num($('fxt').value);if(!f||!t||f===t){toast('Vyplň obě ceny',true);return}settings.priceFix=[...(settings.priceFix||[]).filter(x=>+x.from!==f),{from:f,to:t}];saveSettings();toast(`Pravidlo ${f} → ${t} přidáno`);render();return}
   if(a==='delfix'){settings.priceFix=(settings.priceFix||[]).filter((_,k)=>k!==+b.dataset.k);saveSettings();render();return}
   if(a==='delhw'){hwSamples=hwSamples.filter(s=>s.id!==b.dataset.k);saveHw();render();return}
@@ -1082,6 +1090,18 @@ app.addEventListener('click',e=>{
 document.addEventListener('change',e=>{if(e.target.id==='sk'||e.target.id==='sm'){settings.aiKey=$('sk').value.trim();if($('sm'))settings.aiModel=$('sm').value.trim();saveSettings().then(()=>toast(settings.aiKey?'Klíč uložen':'Klíč smazán'))}});
 addEventListener('online',()=>render());addEventListener('offline',()=>render());
 
+/* ---------- aktualizace / restart ---------- */
+function showUpd(){if($('updbar'))return;const d=document.createElement('div');d.id='updbar';d.innerHTML='<span>Je nová verze aplikace.</span><button class="pri">Restartovat</button>';d.querySelector('button').onclick=()=>location.reload();document.body.appendChild(d)}
+async function reboot(){const st=$('rbst');const say=t=>{if(st)st.textContent=t};
+  if(!navigator.onLine){say('Jsi offline – aktualizace potřebuje internet. Appka zatím běží dál ve verzi '+APP_VER+'.');return}
+  say('Zjišťuji nejnovější verzi…');let nv=null;
+  try{const t=await (await fetch('sw.js?'+Date.now(),{cache:'no-store'})).text();const m=t.match(/uctenky-v(\d+)/);nv=m?+m[1]:null}catch(e){}
+  log('INFO','restart',{mam:APP_VER,server:nv});
+  say(nv&&nv>APP_VER?`Stahuji verzi ${nv}…`:'Načítám aplikaci znovu…');
+  try{await Promise.all(['./','index.html','app.js','sw.js','manifest.webmanifest'].map(f=>fetch(f,{cache:'reload'}).catch(()=>null)))}catch(e){}
+  try{if(window.caches){for(const k of await caches.keys())await caches.delete(k)}}catch(e){}
+  try{if(navigator.serviceWorker){for(const r of await navigator.serviceWorker.getRegistrations())await r.unregister()}}catch(e){}
+  say('Restartuji…');setTimeout(()=>location.replace(location.pathname+'?r='+Date.now()),400)}
 /* ---------- boot ---------- */
 (async()=>{
   try{idb=await openDB();receipts=(await getAll('receipts')).map(syncR);const s=await getOne('kv','settings');if(s)settings={...settings,...s};try{hwSamples=(await getOne('kv','hw'))||[]}catch(e){hwSamples=[]}await preloadURLs()}
@@ -1099,6 +1119,9 @@ addEventListener('online',()=>render());addEventListener('offline',()=>render())
   if(!settings.eetPokl){settings.eetPokl='tel-'+Math.random().toString(36).slice(2,8);saveSettings()}
   if(window.claude&&window.claude.use){window.claude.use('downloads').then(d=>{claudeDl=d||null;log('INFO','downloads',!!d)}).catch(()=>{});window.claude.use('mcp').then(m=>{claudeMcp=m||null;log('INFO','mcp',!!m)}).catch(()=>{});window.claude.use('sample').then(async s=>{if(!s)return;try{const l=await s.limits();log('INFO','sample limits',l);if(l&&l.images){claudeAI=s;claudeMax=l.images.maxCount||4;render()}}catch(e){log('CHYBA','sample.limits',errInfo(e))}}).catch(()=>{})}
   setTimeout(processPending,2000);setTimeout(processEet,3000);
-  if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+  if('serviceWorker' in navigator){const had=!!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js').then(reg=>{reg.update().catch(()=>{})}).catch(()=>{});
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{if(had)showUpd()})}
+  if(location.search.includes('r='))history.replaceState(null,'',location.pathname+location.hash);
 })();
 }
