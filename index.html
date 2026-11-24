@@ -265,6 +265,12 @@ svg .gB rect{fill:#d27a00;stroke:#e0182d;stroke-width:.004}
 svg .gA text,svg .gB text,svg .gQ text{stroke:none;fill:#fff;font-family:sans-serif;font-weight:800;text-anchor:middle;dominant-baseline:central}
 svg .gQ circle{fill:none;stroke:#e0182d;stroke-width:.004;stroke-dasharray:.01 .006}
 svg .gQ circle.gQn{fill:#e0182d;stroke:#fff;stroke-width:.002;stroke-dasharray:none}
+.zsplit{background:var(--paper);border:2px solid var(--penbg);border-radius:14px;padding:10px 12px;margin:8px 0;display:grid;gap:6px}
+.zsplit[hidden]{display:none}
+.spl{font-size:19px;padding:4px 0;border-bottom:1px solid var(--line)}
+.spl.q{background:light-dark(#fff6c7,#3a3313);border-radius:8px;padding:4px 6px}
+.spl .hand{font-family:var(--hand);color:var(--pen);font-weight:700}
+.zzoom{flex-wrap:wrap}
 </style>
 </head>
 <body class="obs">
@@ -290,7 +296,8 @@ svg .gQ circle.gQn{fill:#e0182d;stroke:#fff;stroke-width:.002;stroke-dasharray:n
       <button data-z="row" id="zrow">Řádek</button><button data-z="tap" id="ztap">👆 Ťukat čárky</button><button data-z="all">Celá fotka</button><button data-z="mark" id="zmarkb">✎ Označit řádek</button>
     </div>
     <div class="zbox" id="zimg"></div>
-    <div class="zzoom"><button data-zoom="-" aria-label="Oddálit">−</button><span id="zlvl">1×</span><button data-zoom="+" aria-label="Přiblížit">+</button><span class="note2" id="zhint"></span><button id="zdel" class="mini danger" style="margin-left:auto">Smazat řádek</button><button id="zre" class="mini" >AI přepočítat</button></div>
+    <div class="zzoom"><button data-zoom="-" aria-label="Oddálit">−</button><span id="zlvl">1×</span><button data-zoom="+" aria-label="Přiblížit">+</button><span class="note2" id="zhint"></span><button id="zsplitb" class="mini" style="margin-left:auto">✂ Rozdělit</button><button id="zre" class="mini">AI znovu</button><button id="zdel" class="mini danger" aria-label="Smazat řádek">🗑</button></div>
+    <div class="zsplit" id="zsplit" hidden></div>
     <div class="see" id="zsee"></div>
     <div class="zalts" id="zalts"></div>
     <div class="ztapbar" id="ztapbar" hidden>

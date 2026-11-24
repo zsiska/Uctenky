@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=27;
+const APP_VER=28;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -445,15 +445,28 @@ function renderZoom(){
   $('ztapbar').hidden=zMode!=='tap';$('ztapn').textContent=tapMarks.reduce((a,m)=>a+m[2],0);$('ztap5').setAttribute('aria-pressed',tap5);
   $('zc').value=x.c;$('zsub').textContent=kc((+x.p||0)*(+x.c||0));
   $('zok').textContent=x.q?(fl.length>1?'Sedí ✓ Další ›':'Sedí ✓ Hotovo'):(fl.length?'Další sporné ›':'Hotovo ✓');
-  $('zre').hidden=!(hasAI()&&x.box&&navigator.onLine);
+  $('zre').hidden=!(hasAI()&&x.box&&navigator.onLine);$('zsplitb').hidden=$('zre').hidden;$('zsplitb').classList.toggle('pri',!!(x.multi&&x.multi.length));
 }
-function openZoom(i){zCur=i;zPrice=false;const x=rowsOf(getR(curId))[i];zMode=x&&x.box?'row':'mark';zLevel=autoZoom(getR(curId),x);tapMarks=[];tap5=false;renderZoom();if(!$('zoom').open)$('zoom').showModal()}
+function openZoom(i){zCur=i;zPrice=false;if($('zsplit'))$('zsplit').hidden=true;const x=rowsOf(getR(curId))[i];zMode=x&&x.box?'row':'mark';zLevel=autoZoom(getR(curId),x);tapMarks=[];tap5=false;renderZoom();if(!$('zoom').open)$('zoom').showModal()}
 function stepFlag(d){
   const r=getR(curId);const f=rowsOf(r).map((x,i)=>x.q?i:-1).filter(i=>i>=0);if(!f.length){$('zoom').close();openDone();return}
   let k=f.indexOf(zCur);if(k<0){k=f.findIndex(i=>i>zCur);if(k<0)k=0;if(d<0)k--}else k+=d;
   k=(k+f.length)%f.length;openZoom(f[k]);
 }
 $('zx').onclick=()=>$('zoom').close();
+let zSplit=null;
+$('zsplitb').onclick=async()=>{const r=getR(curId),x=rowsOf(r)[zCur];const p=(r.photos||[])[x.ph||0];if(!x.box||!p){toast('Řádek není označený na fotce',true);return}
+  const b=$('zsplitb'),old=b.textContent;b.disabled=true;b.textContent='Čtu…';const box=$('zsplit');box.hidden=false;setTimeout(()=>box.scrollIntoView({behavior:'smooth',block:'center'}),50);box.innerHTML='<div class="note2"><span class="spin"></span> AI znovu čte tohle místo a hledá všechny ceny…</div>';
+  try{const rec=await getOne('photos',p.id);const fimg=await imgFromBlob((await shrink(rec.blob,2400,.9)).blob);
+    let sub=await regionRows(fimg,x.box,x.ph||0);if(!sub.length)throw{code:'empty',msg:'AI tu nenašla žádné položky'};sub=await countRows(sub,fimg);fixPrices(sub);
+    zSplit={i:zCur,rows:sub};const t=sub.reduce((a,y)=>a+y.p*y.c,0);
+    box.innerHTML=`<b>V tomto místě AI vidí ${sub.length} ${plur(sub.length,'položku','položky','položek')}:</b>`+sub.map(y=>`<div class="spl${y.q?' q':''}"><span class="hand">${y.p} Kč</span> × <b>${y.c}</b> = ${kc(y.p*y.c)}${y.q?' <span class="note2">⚠ zkontroluješ</span>':''}</div>`).join('')+
+      `<div class="note2">Celkem ${kc(t)} místo dosavadních ${kc(x.p*x.c)}.</div><div class="actions"><button class="pri" id="zspy">Nahradit tímto</button><button id="zspn">Nechat původní</button></div>`;
+    box.scrollIntoView({behavior:'smooth',block:'center'});
+    $('zspy').onclick=()=>{const r=getR(curId);snap([r]);const rows=rowsOf(r);rows.splice(zSplit.i,1,...zSplit.rows);r.rows=rows;save(r);box.hidden=true;offerUndo(`Rozděleno na ${zSplit.rows.length} položky`);
+      const f=flagList(r);const k=f.find(i=>i>=zSplit.i);openZoom(k!=null?k:zSplit.i);zSplit=null};
+    $('zspn').onclick=()=>{box.hidden=true;zSplit=null}}
+  catch(e){box.innerHTML=`<div class="status err">${esc(aiErr(e))}</div>`}finally{b.disabled=false;b.textContent=old}};
 $('zdel').onclick=()=>{const r=getR(curId);if(!r)return;const x=rowsOf(r)[zCur];if(!x)return;snap([r]);r.rows=rowsOf(r).filter((_,k)=>k!==zCur);save(r);
   offerUndo(`Řádek ${x.p} Kč × ${x.c} smazán`);const n=rowsOf(r).length;if(!n){$('zoom').close();return}
   const f=flagList(r);if(f.length)openZoom(f.find(i=>i>=zCur)??f[0]);else openZoom(Math.min(zCur,n-1))};
@@ -612,6 +625,7 @@ const COUNT_PROMPT=n=>`Dostaneš ${n} výřezů z ručně psané hospodské úč
 Postupuj zleva doprava a počítej po skupinách, pečlivě, čárku po čárce. Když je výřez nejasný (překryvy, šmouhy, tvary N/X), nastav uncertain=true a do note napiš krátce česky proč.
 Ke každému výřezu vrať i SKUPINY, jak jsi je počítal zleva doprava: "groups":[{"x":0.21,"n":5},…] – x je vodorovný střed skupiny jako zlomek šířky výřezu (0 = levý okraj, 1 = pravý), n = počet čárek ve skupině (plný plotek = 5). Součet n musí být count.
 Nejasná místa dej do "bad":[{"x":0.62,"why":"krátce česky, např. dvě čárky splývají"}].
+Pokud ve výřezu vidíš na začátku jiného řádku nebo jiné skupiny JINOU napsanou cenu než vyznačenou (výřez zabírá víc položek), vypiš ji do "other_prices":[18,35] a počítej jen čárky k vyznačené ceně.
 Odpověz POUZE JSONem: {"counts":[{"id":1,"count":13,"groups":[{"x":0.2,"n":5},{"x":0.4,"n":5},{"x":0.58,"n":3}],"bad":[],"uncertain":false,"note":""}]} – id je číslo výřezu.`;
 const clamp01=n=>Math.min(1,Math.max(0,+n||0));
 async function imgFromBlob(b){const u=URL.createObjectURL(b);try{return await loadImg(u)}finally{URL.revokeObjectURL(u)}}
@@ -627,10 +641,10 @@ async function countPass(rows,crops,order,signal){
     const mx=v=>{if(!bx)return null;const x1=clamp01(bx[0]-.015),x2=clamp01(bx[2]+.015);return +(x1+(x2-x1)*clamp01(v)).toFixed(4)};
     const g=(Array.isArray(c.groups)?c.groups:[]).map(z=>[mx(z.x),num(z.n)]).filter(z=>z[0]!=null&&z[1]>0).sort((a,b)=>a[0]-b[0]);
     const bad=(Array.isArray(c.bad)?c.bad:[]).map(z=>[mx(z.x),String(z.why||'').slice(0,80)]).filter(z=>z[0]!=null);
-    out[i]={c:num(c.count),q:!!c.uncertain||bad.length>0,n:String(c.note||''),g,bad}});
+    const op=(Array.isArray(c.other_prices)?c.other_prices:[]).map(num).filter(v=>v>0);out[i]={c:num(c.count),q:!!c.uncertain||bad.length>0,n:String(c.note||''),g,bad,op}});
   return out;
 }
-function merge(rows,A,B){rows.forEach((x,i)=>{const a=A[i],b=B[i];const c0=x.c;x.ga=a&&a.g&&a.g.length?a.g:null;x.gb=b&&b.g&&b.g.length?b.g:null;x.bad=[...((a&&a.bad)||[]),...((b&&b.bad)||[])].filter((z,k,arr)=>arr.findIndex(w=>Math.abs(w[0]-z[0])<.02)===k).slice(0,4);if(!x.ga&&x.gb){x.ga=x.gb;x.gb=null}
+function merge(rows,A,B){rows.forEach((x,i)=>{const a=A[i],b=B[i];const c0=x.c;x.ga=a&&a.g&&a.g.length?a.g:null;x.gb=b&&b.g&&b.g.length?b.g:null;x.multi=[...new Set([...((a&&a.op)||[]),...((b&&b.op)||[])])].filter(v=>v!==+x.p);x.bad=[...((a&&a.bad)||[]),...((b&&b.bad)||[])].filter((z,k,arr)=>arr.findIndex(w=>Math.abs(w[0]-z[0])<.02)===k).slice(0,4);if(!x.ga&&x.gb){x.ga=x.gb;x.gb=null}
   if(a&&b){if(a.c===b.c){x.c=a.c;if(a.q||b.q){x.q=1;x.note=(a.n||b.n||x.note)}else if(x.q&&a.c===c0)x.q=1;else x.q=0;if(c0!==a.c&&x.q){x.alts=[...new Set([c0,a.c])].sort((m,n)=>m-n);x.note=(x.note?x.note+' · ':'')+`1. odhad ${c0}, přepočet ${a.c}`}}
     else{x.c=Math.max(a.c,b.c);x.q=1;x.alts=[...new Set([a.c,b.c,c0])].sort((m,n)=>m-n);x.note=`AI napočítala jednou ${a.c}, podruhé ${b.c}. Vyber nebo přepočítej.`+(a.n?' '+a.n:'')}}
   else if(a||b){const v=a||b;x.c=v.c;x.q=1;x.note='Přepočet jen jednou: '+v.c+(v.n?' – '+v.n:'')}
@@ -679,19 +693,54 @@ async function readPhoto(pid,ph,status,signal){
     box:Array.isArray(x.box)&&x.box.length===4?x.box.map(clamp01):null,spots:Array.isArray(x.spot)&&x.spot.length===4?[x.spot.map(clamp01)]:[],ph,ai:1,pai:num(x.price),pq:x.price_uncertain?1:0,palts:Array.isArray(x.price_alts)?x.price_alts.map(num).filter(Boolean):[]})).filter(x=>x.p||x.c);
   log('INFO','čtení: řádky z 1. průchodu',rows.map(x=>[x.p,x.c,x.box?x.box.map(v=>+v.toFixed(2)):null]));
   if(!rows.length)throw{code:'empty',msg:'Na fotce jsem nenašel žádné řádky'};
-  status('Připravuji výřezy řádků…',2);const mid=(await shrink(rec.blob,2000,.9)).blob;const fimg=await imgFromBlob(mid);const crops=[];for(const x of rows)crops.push(x.box?await cropRow(fimg,x.box):null);
+  status('Připravuji výřezy řádků…',2);const mid=(await shrink(rec.blob,2400,.9)).blob;const fimg=await imgFromBlob(mid);
+  /* příliš vysoké rámečky = nejspíš víc řádků v jednom → rozdělit hned */
+  const med=medianH(rows);let pre=rows;if(med&&rows.some(x=>isTall(x,med))){log('INFO','čtení: vysoké rámečky',rows.filter(x=>isTall(x,med)).map(x=>x.p));pre=await splitRows(rows,fimg,signal,x=>isTall(x,med),status)}
+  let kept=await countRows(pre.filter(x=>!x.split||x.ga===undefined),fimg,signal,status);kept=[...kept,...pre.filter(x=>x.split&&x.ga!==undefined)];
+  /* AI při počítání viděla ve výřezu jiné ceny → rozdělit */
+  if(kept.some(x=>x.multi&&x.multi.length&&!x.split))kept=await splitRows(kept,fimg,signal,x=>x.multi&&x.multi.length&&!x.split,status);
+  kept.sort((a,b)=>a.box&&b.box?(a.box[1]-b.box[1])||(a.box[0]-b.box[0]):0);
+  status('Hotovo',3);
+  if(!kept.length)throw{code:'empty',msg:'Na fotce jsem nenašel žádné čárky'};
+  fixPrices(kept);log('INFO','čtení: výsledek',kept.map(x=>[x.p,x.c,x.q?'?':'ok']));return kept;
+}
+/* ---------- oblast s více řádky: přečíst znovu a rozdělit ---------- */
+const REGION_PROMPT=()=>`Obrázek je výřez z ručně psané hospodské účtenky. Může obsahovat JEDEN nebo VÍCE řádků. Položka = cena v Kč napsaná na začátku a za ní čárky (každá čárka 1 kus, 4 přeškrtnuté pátou = 5).
+- na jednom řádku mohou být dvě skupiny (vlevo a vpravo), každá se svou cenou = dvě položky
+- řádek čárek bez ceny těsně pod řádkem s cenou patří k té ceně (samostatná položka se stejnou cenou)
+- čáry useknuté horním nebo dolním okrajem výřezu patří sousedním řádkům – ignoruj je
+- stůl, pozadí a tištěný text ignoruj
+CENÍK této hospody: ${priceList().join(', ')} Kč (cena mimo ceník je podezřelá → price_uncertain true a price_alts).
+Pro každou položku vrať price, count, box [x1,y1,x2,y2] jako zlomky TOHOTO VÝŘEZU (0–1, x zleva, y shora) – box ať obsahuje cenu i všechny její čárky.
+Odpověz POUZE JSONem: {"rows":[{"price":18,"count":5,"box":[0.02,0.1,0.4,0.35],"uncertain":false,"note":"","price_uncertain":false,"price_alts":[]}]}`;
+async function regionRows(fimg,box,ph,signal){const m=.012;const x1=clamp01(box[0]-m),y1=clamp01(box[1]-m),x2=clamp01(box[2]+m),y2=clamp01(box[3]+m);
+  const W=fimg.naturalWidth,Hh=fimg.naturalHeight;const c=document.createElement('canvas');const sw=(x2-x1)*W,sh=(y2-y1)*Hh;const s=Math.min(1.5,1400/sw);
+  c.width=Math.max(1,Math.round(sw*s));c.height=Math.max(1,Math.round(sh*s));c.getContext('2d').drawImage(fimg,x1*W,y1*Hh,sw,sh,0,0,c.width,c.height);
+  const blob=await canvasBlob(c,.9);const ps=[{text:REGION_PROMPT()},{inline_data:{mime_type:'image/jpeg',data:await b64(blob)}},...hwParts()];
+  const d=parseJSON(await aiCall(ps,signal,true));const mp=b=>[x1+(x2-x1)*clamp01(b[0]),y1+(y2-y1)*clamp01(b[1]),x1+(x2-x1)*clamp01(b[2]),y1+(y2-y1)*clamp01(b[3])].map(v=>+v.toFixed(4));
+  const rows=(d&&Array.isArray(d.rows)?d.rows:[]).filter(x=>Array.isArray(x.box)&&x.box.length===4&&num(x.price)>0).map(x=>({p:num(x.price),c:num(x.count),q:x.uncertain?1:0,note:String(x.note||'').slice(0,200),box:mp(x.box),spots:[],ph,ai:1,pai:num(x.price),pq:x.price_uncertain?1:0,palts:Array.isArray(x.price_alts)?x.price_alts.map(num).filter(Boolean):[],split:1}));
+  rows.sort((a,b)=>(a.box[1]-b.box[1])||(a.box[0]-b.box[0]));log('INFO','oblast: rozděleno',rows.map(x=>[x.p,x.c]));return rows}
+/* dvojí přepočet řádků + sloučení + úklid */
+async function countRows(rows,fimg,signal,status){
+  const crops=[];for(const x of rows)crops.push(x.box?await cropRow(fimg,x.box):null);
   const idx=rows.map((x,i)=>i).filter(i=>crops[i]);let A={},B={};
-  if(idx.length){status(`Počítám ${idx.length} ${plur(idx.length,'řádek','řádky','řádků')}, 2× souběžně…`,2);const rs=await Promise.allSettled([countPass(rows,crops,idx,signal),countPass(rows,crops,[...idx].reverse(),signal)]);
+  if(idx.length){status&&status(`Počítám ${idx.length} ${plur(idx.length,'řádek','řádky','řádků')}, 2× souběžně…`,2);const rs=await Promise.allSettled([countPass(rows,crops,idx,signal),countPass(rows,crops,[...idx].reverse(),signal)]);
     if(signal&&signal.aborted)throw{name:'AbortError'};
     rs.forEach((x,k)=>{if(x.status==='rejected')log('VAROV','přepočet '+(k+1)+' selhal – beru výsledek bez něj',errInfo(x.reason))});
     A=rs[0].status==='fulfilled'?rs[0].value:{};B=rs[1].status==='fulfilled'?rs[1].value:{}}
-  status('Hotovo',3);
   log('INFO','čtení: přepočty',{A,B});merge(rows,A,B);
-  /* řádky bez jediné čárky (stůl, pozadí, cena bez čárek) zahodit */
   const drop=rows.filter(x=>!(+x.c>0)&&!(x.alts||[]).some(v=>v>0));if(drop.length)log('INFO','čtení: zahozeny řádky bez čárek',drop.map(x=>[x.p,x.box&&x.box.map(v=>+v.toFixed(2))]));
-  const kept=rows.filter(x=>!drop.includes(x));if(!kept.length)throw{code:'empty',msg:'Na fotce jsem nenašel žádné čárky'};
-  fixPrices(kept);log('INFO','čtení: výsledek',kept.map(x=>[x.p,x.c,x.q?'?':'ok']));return kept;
-}
+  return rows.filter(x=>!drop.includes(x))}
+const isTall=(x,med)=>x.box&&med>0&&(x.box[3]-x.box[1])>med*1.75;
+function medianH(rows){const h=rows.filter(x=>x.box).map(x=>x.box[3]-x.box[1]).sort((a,b)=>a-b);return h.length>=3?h[Math.floor(h.length/2)]:0}
+async function splitRows(rows,fimg,signal,which,status){let out=[];for(let i=0;i<rows.length;i++){const x=rows[i];
+    if(!which(x)){out.push(x);continue}
+    try{status&&status('Rozděluji místo s více řádky…',2);const sub=await regionRows(fimg,x.box,x.ph,signal);
+      if(sub.length>=2||(sub.length===1&&sub[0].p!==x.p)){const cnt=await countRows(sub,fimg,signal);if(cnt.length){out.push(...cnt);continue}}}
+    catch(e){if(e&&e.name==='AbortError')throw e;log('VAROV','rozdělení selhalo',errInfo(e))}
+    if(x.multi&&x.multi.length){x.q=1;x.note=`Ve výřezu jsou i jiné ceny (${x.multi.join(', ')} Kč) – nejspíš víc řádků. Klepni na ✂ Rozdělit.`+(x.note?' · '+x.note:'')}
+    out.push(x)}
+  return out}
 /* jeden řádek znovu (ze zvětšení) */
 async function recountRow(r,i,status){
   const x=rowsOf(r)[i];const p=(r.photos||[])[x.ph||0];if(!x.box||!p)throw{code:'empty',msg:'Řádek není označený na fotce'};
