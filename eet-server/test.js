@@ -1,0 +1,12 @@
+const {buildTrzba,signEnvelope,parseOdpoved,loadP12,isoPrague}=require('./server');
+const {SignedXml}=require('xml-crypto');const {DOMParser}=require('@xmldom/xmldom');const fs=require('fs');const crypto=require('crypto');
+const c=loadP12('test.p12','heslo');console.log('CN',c.cn);
+const xml=signEnvelope(buildTrzba({uuid:crypto.randomUUID(),first:true,overeni:true,id_jednotky:1,id_pokl:'telefon-1',porad_cis:'2026-001',dat_trzby:'2026-11-23T21:30:00Z',celk_trzba:10120},'CZ1234567890'),c);
+console.log(xml.slice(0,400),'...',xml.length,'bytes');
+const doc=new DOMParser().parseFromString(xml,'text/xml');
+const sigNode=doc.getElementsByTagNameNS('http://www.w3.org/2000/09/xmldsig#','Signature')[0];
+const v=new SignedXml({publicCert:fs.readFileSync('t.crt','utf8'),idMode:'wssecurity'});v.loadSignature(sigNode);
+console.log('podpis platny:',v.checkSignature(xml));
+console.log(isoPrague(new Date('2026-07-01T10:00:00Z')),isoPrague(new Date('2026-11-23T21:30:00Z')));
+console.log(parseOdpoved('<s:Envelope><s:Body><eet:Odpoved><eet:Hlavicka uuid_zpravy="x" dat_prij="2027-01-08T21:19:41+01:00"/><eet:Potvrzeni pok="e23e5a5a-08d7-4a08-844d-2b6c6b60621d-ff" test="true"/><eet:Varovani kod_varov="4">cas</eet:Varovani></eet:Odpoved></s:Body></s:Envelope>'));
+console.log(parseOdpoved('<eet:Odpoved><eet:Hlavicka/><eet:Chyba kod="-1" test="true">Docasna chyba</eet:Chyba></eet:Odpoved>'));

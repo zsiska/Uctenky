@@ -1,0 +1,20 @@
+{
+  "name": "uctenky-eet-brana",
+  "version": "1.0.0",
+  "description": "EET 2.0 brána pro aplikaci Účtenky",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@xmldom/xmldom": "^0.9.12",
+    "node-forge": "^1.4.4",
+    "xml-crypto": "^6.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
