@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=25;
+const APP_VER=26;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -91,7 +91,7 @@ function toast(msg,err){let t=$('toast');if(!t){t=document.createElement('div');
 let undoSnap=null,undoT;
 function snap(list,msg){undoSnap={items:list.filter(Boolean).map(r=>({id:r.id,json:JSON.stringify(r),existed:true})),msg};}
 function snapAll(msg){undoSnap={all:JSON.stringify(receipts),msg}}
-function offerUndo(msg){if(!undoSnap)return;$('undot').textContent=msg||undoSnap.msg||'Hotovo';$('undo').hidden=false;clearTimeout(undoT);undoT=setTimeout(()=>{$('undo').hidden=true;undoSnap=null},7000)}
+function offerUndo(msg){if(!undoSnap)return;(document.querySelector('dialog[open]')||document.body).appendChild($('undo'));$('undot').textContent=msg||undoSnap.msg||'Hotovo';$('undo').hidden=false;clearTimeout(undoT);undoT=setTimeout(()=>{$('undo').hidden=true;undoSnap=null},7000)}
 function doUndo(){const u=undoSnap;if(!u)return;
   if(u.all){const old=JSON.parse(u.all);const ids=new Set(old.map(r=>r.id));receipts.filter(r=>!ids.has(r.id)).forEach(r=>{try{tx('receipts','readwrite',s=>s.delete(r.id))}catch(e){}});receipts=old.map(syncR);receipts.forEach(r=>save(r))}
   else u.items.forEach(it=>{const o=syncR(JSON.parse(it.json));const k=receipts.findIndex(r=>r.id===it.id);if(k>=0)receipts[k]=o;else receipts.push(o);save(o)});
@@ -431,6 +431,9 @@ function stepFlag(d){
   k=(k+f.length)%f.length;openZoom(f[k]);
 }
 $('zx').onclick=()=>$('zoom').close();
+$('zdel').onclick=()=>{const r=getR(curId);if(!r)return;const x=rowsOf(r)[zCur];if(!x)return;snap([r]);r.rows=rowsOf(r).filter((_,k)=>k!==zCur);save(r);
+  offerUndo(`Řádek ${x.p} Kč × ${x.c} smazán`);const n=rowsOf(r).length;if(!n){$('zoom').close();return}
+  const f=flagList(r);if(f.length)openZoom(f.find(i=>i>=zCur)??f[0]);else openZoom(Math.min(zCur,n-1))};
 $('zre').onclick=async()=>{const r=getR(curId),x=rowsOf(r)[zCur];const b=$('zre');b.disabled=true;const old=b.textContent;
   try{const res=await recountRow(r,zCur,t=>b.textContent=t);x.c=res.c;x.note=res.txt;if(res.sure)x.q=0;save(r);renderZoom();toast(res.txt)}
   catch(e){toast(aiErr(e),true)}finally{b.disabled=false;b.textContent=old}};
@@ -579,6 +582,7 @@ Obrázek 1 je celá fotka. Obrázky 2, 3 a 4 jsou výřezy celé šířky ve vy�
 Počítej velmi pečlivě, čárku po čárce. Kde si nejsi jistý (překryvy, šmouhy, tvary N/X, nejasná cena), nastav "uncertain": true, do "note" napiš krátce česky proč a do "spot" dej rámeček kolem sporného místa.
 Odpověz POUZE JSONem:
 {"rows":[{"price":55,"count":25,"uncertain":false,"note":"1. řádek","box":[x1,y1,x2,y2],"spot":null}]}
+Počítej jen to, co je napsané na papíře účtenky. Stůl, pozadí, prsty, tištěný text a razítka ignoruj. Řádek bez jediné čárky nevracej.
 box a spot jsou souřadnice v CELÉ fotce jako zlomky 0–1 (x zleva, y shora). Řádky seřaď shora dolů.`;
 const COUNT_PROMPT=n=>`Dostaneš ${n} výřezů z ručně psané hospodské účtenky. Každý výřez je jeden řádek (nebo blok řádků) čárek pro jednu cenu. Výřez může na okrajích obsahovat kousky sousedních řádků – ty nepočítej.
 Úkol: u každého výřezu spočítej čárky patřící k vyznačené ceně. Každá svislá čárka = 1. Čtyři čárky přeškrtnuté šikmou pátou = 5 (přeškrtnutí se nepočítá navíc). Číslice ceny nejsou čárky. Čárka přeškrtnutá malým křížkem je zrušená.
@@ -653,7 +657,11 @@ async function readPhoto(pid,ph,status,signal){
     rs.forEach((x,k)=>{if(x.status==='rejected')log('VAROV','přepočet '+(k+1)+' selhal – beru výsledek bez něj',errInfo(x.reason))});
     A=rs[0].status==='fulfilled'?rs[0].value:{};B=rs[1].status==='fulfilled'?rs[1].value:{}}
   status('Hotovo',3);
-  log('INFO','čtení: přepočty',{A,B});merge(rows,A,B);fixPrices(rows);log('INFO','čtení: výsledek',rows.map(x=>[x.p,x.c,x.q?'?':'ok']));return rows;
+  log('INFO','čtení: přepočty',{A,B});merge(rows,A,B);
+  /* řádky bez jediné čárky (stůl, pozadí, cena bez čárek) zahodit */
+  const drop=rows.filter(x=>!(+x.c>0)&&!(x.alts||[]).some(v=>v>0));if(drop.length)log('INFO','čtení: zahozeny řádky bez čárek',drop.map(x=>[x.p,x.box&&x.box.map(v=>+v.toFixed(2))]));
+  const kept=rows.filter(x=>!drop.includes(x));if(!kept.length)throw{code:'empty',msg:'Na fotce jsem nenašel žádné čárky'};
+  fixPrices(kept);log('INFO','čtení: výsledek',kept.map(x=>[x.p,x.c,x.q?'?':'ok']));return kept;
 }
 /* jeden řádek znovu (ze zvětšení) */
 async function recountRow(r,i,status){
