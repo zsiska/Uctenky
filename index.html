@@ -208,6 +208,21 @@ svg .mkt{font:700 .014px sans-serif;fill:#fff;stroke:none;text-anchor:middle;dom
 .znum span{display:block;font-size:14px;color:var(--mute);margin-top:2px}
 .znav{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px;margin-top:10px}
 .znav button{min-height:64px!important;font-size:20px!important;border-radius:16px!important}
+
+.preview:empty{display:none}
+.aprog{background:var(--bg);border-radius:14px;padding:12px 14px;margin:8px 0}
+.aphead{display:flex;justify-content:space-between;align-items:baseline}
+.aphead b{font-size:28px;color:var(--pen)}
+.apbarw{height:14px;border-radius:7px;background:var(--line);overflow:hidden;margin:8px 0 10px}
+.apbar{height:100%;width:0;border-radius:7px;background-color:var(--penbg);background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.22) 0 12px,transparent 12px 24px);background-size:34px 34px;animation:apmove 1s linear infinite;transition:width .3s}
+@keyframes apmove{to{background-position:34px 0}}
+@media(prefers-reduced-motion:reduce){.apbar{animation:none}}
+.apsteps{list-style:none;margin:0;padding:0;display:grid;gap:6px;font-size:17px}
+.apsteps li{color:var(--mute)}
+.apsteps li.done{color:var(--ok)}
+.apsteps li.now{color:var(--ink);font-weight:700}
+.spin{display:inline-block;width:14px;height:14px;border:3px solid var(--line);border-top-color:var(--pen);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body class="obs">
@@ -273,6 +288,12 @@ svg .mkt{font:700 .014px sans-serif;fill:#fff;stroke:none;text-anchor:middle;dom
   <div class="db">
     <div id="aname" style="margin-bottom:8px"></div>
     <p class="note2"><b>Během čtení nech displej rozsvícený a appku otevřenou.</b> AI najde řádky a ceny a pak každý řádek spočítá zvlášť dvakrát (přeškrtnuté 4 = 5). Kde se oba počty liší, řádek označí žlutě. Žluté řádky přepočítej ručně.</p>
+    <div id="aprogress" class="aprog" hidden>
+      <div class="aphead"><b id="appct">0 %</b><span id="aptime">0 s</span></div>
+      <div class="apbarw"><div id="apbar" class="apbar"></div></div>
+      <ol id="apsteps" class="apsteps"></ol>
+      <div class="note2" id="apnote"></div>
+    </div>
     <p class="status" id="ast"></p>
     <div class="preview" id="aprog" style="max-height:200px"></div>
   </div>

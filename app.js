@@ -489,14 +489,29 @@ async function listModels(){
   log('INFO','Gemini modely',list.slice(0,8));
   return list;
 }
+let aiChunk=null; /* callback(znaků) pro průběh */
+function thinkCfg(m){if(settings.noThink)return{};if(/gemini-[3-9]/.test(m))return{thinkingConfig:{thinkingLevel:'low'}};if(/gemini-2\.5-flash/.test(m))return{thinkingConfig:{thinkingBudget:0}};return{}}
+async function readSSE(res,onChunk){
+  const rd=res.body.getReader();const dec=new TextDecoder();let buf='',txt='';
+  for(;;){const {done,value}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let k;
+    while((k=buf.indexOf('\n'))>=0){const line=buf.slice(0,k).trim();buf=buf.slice(k+1);if(!line.startsWith('data:'))continue;
+      try{const d=JSON.parse(line.slice(5));if(d.error)throw{code:d.error.code||0,msg:d.error.message};const ps=(d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts)||[];
+        for(const p of ps){if(p.thought){onChunk&&onChunk(txt.length,true);continue}if(p.text){txt+=p.text;onChunk&&onChunk(txt.length,false)}}}catch(e){if(e&&e.msg)throw e}}}
+  return txt;
+}
 async function gemini(parts,signal,json){
-  let models=settings.aiModel?[settings.aiModel]:[...DEF_MODELS];let last;let listed=false;
-  for(let i=0;i<models.length;i++){const m=models[i];
-    const res=await gfetch(`${GAPI}/models/${encodeURIComponent(m)}:generateContent`,{method:'POST',signal,headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0,...(json?{responseMimeType:'application/json'}:{})}})});
-    log('INFO','Gemini '+m,{status:res.status});
-    if(res.ok){const d=await res.json();const t=(d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts||[]).map(p=>p.text||'').join('');if(!t)throw{code:'empty',msg:'model vrátil prázdnou odpověď'};if(settings.aiModel!==m){settings.aiModel=m;saveSettings()}return t}
+  let models=settings.aiModel?[settings.aiModel]:[...DEF_MODELS];let last;let listed=false;let triedNoThink=false;
+  for(let i=0;i<models.length;i++){const m=models[i];const t0=Date.now();
+    const stream=!!(window.ReadableStream&&TextDecoder);const cb=aiChunk;
+    const res=await gfetch(`${GAPI}/models/${encodeURIComponent(m)}:${stream?'streamGenerateContent?alt=sse':'generateContent'}`,{method:'POST',signal,headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0,...thinkCfg(m),...(json?{responseMimeType:'application/json'}:{})}})});
+    log('INFO','Gemini '+m,{status:res.status,stream});
+    if(res.ok){let t='';
+      if(stream&&res.body){t=await readSSE(res,cb)}else{const d=await res.json();t=(d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('')}
+      log('INFO','Gemini odpověď',{ms:Date.now()-t0,znaku:t.length});
+      if(!t)throw{code:'empty',msg:'model vrátil prázdnou odpověď'};if(settings.aiModel!==m){settings.aiModel=m;saveSettings()}return t}
     last=await gErr(res);log('CHYBA','Gemini '+m,last);
+    if(res.status===400&&/think/i.test(last.msg)&&!triedNoThink){triedNoThink=true;settings.noThink=true;saveSettings();i--;continue}
     if(res.status===400&&/api.?key/i.test(last.msg))throw{code:'key',msg:last.msg};
     if(res.status===401||res.status===403)throw{code:'key',msg:last.msg};
     if(res.status===404&&!listed){listed=true;try{const l=await listModels();const rest=l.filter(x=>!models.includes(x));models.splice(i+1,0,...rest.slice(0,4))}catch(e){if(e.code==='key')throw e}}
@@ -545,7 +560,7 @@ function merge(rows,A,B){rows.forEach((x,i)=>{const a=A[i],b=B[i];const c0=x.c;
 /* přečte jednu fotku: vrátí řádky */
 async function readPhoto(pid,ph,status,signal){
   const rec=await getOne('photos',pid);if(!rec)throw{code:'empty',msg:'Fotka chybí'};
-  status('Připravuji fotku…');
+  status('Připravuji fotku…',0);
   const {blob}=await shrink(rec.blob,1600,.88);const img=await imgFromBlob(blob);
   const lim=claudeAI&&!settings.aiKey?claudeMax:4;const strips=lim>=4?[[0,.4],[.3,.7],[.6,1]]:lim>=3?[[0,.55],[.45,1]]:[];
   const stripTxt=strips.length?'Obrázek 1 je celá fotka. '+strips.map((s,i)=>`Obrázek ${i+2} je výřez celé šířky ve vyšším rozlišení, výška ${String(s[0]).replace('.',',')}–${String(s[1]).replace('.',',')}`).join('; ')+' (zlomky výšky celé fotky). Překryvy nepočítej dvakrát.':'Obrázek 1 je celá fotka.';
@@ -553,15 +568,16 @@ async function readPhoto(pid,ph,status,signal){
   const parts=[{text:prompt},{inline_data:{mime_type:'image/jpeg',data:await b64(blob)}}];
   for(const [a,b] of strips)parts.push({inline_data:{mime_type:'image/jpeg',data:await b64(await cropBlob(img,a,b))}});
   log('INFO','čtení: obrázky připraveny',{full:Math.round(blob.size/1024)+'kB',w:img.naturalWidth,h:img.naturalHeight,pruhy:strips.length});
-  status('1/3 Hledám řádky a ceny…');
+  status('Hledám řádky a ceny…',1);
   const data=parseJSON(await aiCall(parts,signal,true));
   const rows=(data&&Array.isArray(data.rows)?data.rows:[]).map(x=>({p:num(x.price),c:num(x.count),q:x.uncertain?1:0,note:String(x.note||'').slice(0,200),
     box:Array.isArray(x.box)&&x.box.length===4?x.box.map(clamp01):null,spots:Array.isArray(x.spot)&&x.spot.length===4?[x.spot.map(clamp01)]:[],ph,ai:1})).filter(x=>x.p||x.c);
   log('INFO','čtení: řádky z 1. průchodu',rows.map(x=>[x.p,x.c,x.box?x.box.map(v=>+v.toFixed(2)):null]));
   if(!rows.length)throw{code:'empty',msg:'Na fotce jsem nenašel žádné řádky'};
-  status('Připravuji výřezy řádků…');const mid=(await shrink(rec.blob,2000,.9)).blob;const fimg=await imgFromBlob(mid);const crops=[];for(const x of rows)crops.push(x.box?await cropRow(fimg,x.box):null);
+  status('Připravuji výřezy řádků…',2);const mid=(await shrink(rec.blob,2000,.9)).blob;const fimg=await imgFromBlob(mid);const crops=[];for(const x of rows)crops.push(x.box?await cropRow(fimg,x.box):null);
   const idx=rows.map((x,i)=>i).filter(i=>crops[i]);let A={},B={};
-  if(idx.length){status('2/3 Počítám každý řádek zvlášť…');A=await countPass(rows,crops,idx,signal);status('3/3 Kontrolní přepočet…');B=await countPass(rows,crops,[...idx].reverse(),signal)}
+  if(idx.length){status(`Počítám ${idx.length} ${plur(idx.length,'řádek','řádky','řádků')}, 2× souběžně…`,2);[A,B]=await Promise.all([countPass(rows,crops,idx,signal),countPass(rows,crops,[...idx].reverse(),signal)])}
+  status('Hotovo',3);
   log('INFO','čtení: přepočty',{A,B});merge(rows,A,B);log('INFO','čtení: výsledek',rows.map(x=>[x.p,x.c,x.q?'?':'ok']));return rows;
 }
 /* jeden řádek znovu (ze zvětšení) */
@@ -569,7 +585,7 @@ async function recountRow(r,i,status){
   const x=rowsOf(r)[i];const p=(r.photos||[])[x.ph||0];if(!x.box||!p)throw{code:'empty',msg:'Řádek není označený na fotce'};
   const rec=await getOne('photos',p.id);const crop=await cropRow(await imgFromBlob(rec.blob),x.box);
   const tmp=[{...x}];status('AI přepočítává řádek…');
-  const A=await countPass(tmp,[crop],[0]);const B=await countPass(tmp,[crop],[0]);
+  const [A,B]=await Promise.all([countPass(tmp,[crop],[0]),countPass(tmp,[crop],[0])]);
   const a=A[0],b=B[0];if(!a&&!b)throw{code:'empty',msg:'AI nevrátila počet'};
   return a&&b&&a.c===b.c?{c:a.c,sure:!(a.q||b.q),txt:`AI 2× napočítala ${a.c}`}:{c:(a||b).c,sure:false,txt:`AI napočítala ${a?a.c:'?'} a ${b?b.c:'?'} – přepočítej ručně`};
 }
@@ -579,17 +595,26 @@ async function runAI(auto){
   aiResult=null;$('arep').disabled=$('aadd').disabled=true;$('astop').hidden=false;
   const st=$('ast'),pr=$('aprog');st.className='status';pr.textContent='';renderAIName();$('ai').showModal();
   aiCtl=new AbortController();$('aretry').hidden=true;
-  const t0=Date.now();let stage='';const tick=setInterval(()=>{st.textContent=`${stage} (${Math.round((Date.now()-t0)/1000)} s)`},1000);
+  const t0=Date.now();let stage='',step=0,stepT=Date.now(),chars=0,thinking=false;
+  const STEPS=['Příprava fotky','Hledání řádků a cen','Přepočet každého řádku','Hotovo'];const SPAN=[[0,6,3],[6,55,35],[55,96,30],[100,100,1]];
+  const prog=$('aprogress');prog.hidden=false;
+  const draw=()=>{const [a,b,tau]=SPAN[step];const el=(Date.now()-stepT)/1000;const pct=step===3?100:a+(b-a)*(1-Math.exp(-el/tau));
+    $('apbar').style.width=pct.toFixed(1)+'%';$('appct').textContent=Math.round(pct)+' %';
+    $('aptime').textContent=`${Math.round((Date.now()-t0)/1000)} s`;
+    $('apsteps').innerHTML=STEPS.map((s,i)=>`<li class="${i<step?'done':i===step?'now':''}">${i<step?'✓':i===step?'<span class="spin"></span>':'○'} ${i===step&&step<3?esc(stage):s}</li>`).join('');
+    $('apnote').textContent=step===1||step===2?(chars?`Přijímám odpověď… ${chars} znaků`:thinking?'AI přemýšlí…':'Čekám na AI…')+((Date.now()-stepT)>60000?' · Google teď odpovídá pomalu, vydrž nebo Zastavit a Zkusit znovu.':''):'';};
+  aiChunk=(n,th)=>{chars=n;thinking=th;};
+  const tick=setInterval(draw,250);draw();
   try{
-    const rows=await readPhoto(p.id,curPhoto,t=>{stage=t;st.textContent=`${t} (${Math.round((Date.now()-t0)/1000)} s)`},aiCtl.signal);clearInterval(tick);
+    const rows=await readPhoto(p.id,curPhoto,(t,s)=>{stage=t;if(s!=null&&s!==step){step=s;stepT=Date.now();chars=0;thinking=false}draw()},aiCtl.signal);clearInterval(tick);step=3;draw();setTimeout(()=>{prog.hidden=true},900);
     r.pendingAI=false;save(r);
     aiResult=rows;const q=rows.reduce((a,x)=>a+x.c,0),t=rows.reduce((a,x)=>a+x.c*x.p,0),f=rows.filter(x=>x.q).length;
     st.className='status ok';st.textContent=`Hotovo: ${rows.length} ${plur(rows.length,'řádek','řádky','řádků')}, ${q} ks, ${kc(t)}. Ke kontrole: ${f}.`;
     pr.textContent=rows.map(x=>`${x.p} Kč × ${x.c}${x.q?'  ⚠ '+x.note:''}`).join('\n');
     $('arep').disabled=$('aadd').disabled=false;
     if(auto&&!rowsOf(r).some(x=>(x.ph||0)===curPhoto)){setTimeout(()=>applyAI(true,true),500)}
-  }catch(e){clearInterval(tick);log('CHYBA','čtení selhalo ve fázi: '+stage,errInfo(e));st.className='status err';st.textContent=aiErr(e)+(stage?` [fáze: ${stage}]`:'');$('aretry').hidden=false;if(e&&e.name!=='AbortError'&&!navigator.onLine){r.pendingAI=true;save(r);st.textContent+=' Přečtu ji sám, až bude internet.'}}
-  finally{$('astop').hidden=true;aiCtl=null}
+  }catch(e){clearInterval(tick);prog.hidden=true;log('CHYBA','čtení selhalo ve fázi: '+stage,errInfo(e));st.className='status err';st.textContent=aiErr(e)+(stage?` [fáze: ${stage}]`:'');$('aretry').hidden=false;if(e&&e.name!=='AbortError'&&!navigator.onLine){r.pendingAI=true;save(r);st.textContent+=' Přečtu ji sám, až bude internet.'}}
+  finally{$('astop').hidden=true;aiCtl=null;aiChunk=null}
 }
 function renderAIName(){const r=getR(curId);const box=$('aname');if(!r||!box)return;
   const ns=names().filter(n=>n!==(r.name||'').trim()).slice(0,8);
