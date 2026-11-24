@@ -46,7 +46,7 @@ const getOneRaw=(store,key)=>memMode&&!idb?Promise.resolve(undefined):new Promis
 
 let receipts=[],settings={email:'',prices:DEF_PRICES,aiKey:'',aiModel:'',issuer:'',issuerInfo:'',payPrefix:'',payNext:1,signature:'',eetMode:'off',eetMojeUrl:'https://eet.gov.cz',eetUrl:'',eetToken:'',eetJednotka:'',eetPokl:'',eetOvereni:false};
 let claudeAI=null,claudeMax=0,claudeDl=null,claudeMcp=null;const hasAI=()=>!!(claudeAI||settings.aiKey);
-const DEF_MODELS=['gemini-3.6-flash','gemini-2.5-flash','gemini-2.5-flash-lite'];
+const DEF_MODELS=['gemini-3.8-flash','gemini-3.7-flash','gemini-3.6-flash','gemini-3.5-flash','gemini-2.5-flash'];
 let debtSel='',view='list',curId=null,curPhoto=0,filter='open',query='',person='';
 const photoURLs=new Map();
 async function urlFor(pid){if(!pid)return'';if(photoURLs.has(pid))return photoURLs.get(pid);const p=await getOne('photos',pid);if(!p)return'';const u=URL.createObjectURL(p.blob);photoURLs.set(pid,u);return u}
@@ -465,24 +465,39 @@ async function aiCall(parts,signal,json){
   return gemini(parts,signal,json);
 }
 const maxImgs=()=>claudeAI&&!settings.aiKey?Math.max(2,claudeMax-1):30;
+const GAPI='https://generativelanguage.googleapis.com/v1beta';
+async function gErr(res){let msg='';try{const d=await res.json();msg=(d.error&&(d.error.status?d.error.status+': ':'')+(d.error.message||''))||''}catch(e){}return{code:res.status,msg}}
+/* zjistí modely, které klíč smí použít, a seřadí je od nejlepšího */
+async function listModels(){
+  const res=await fetch(GAPI+'/models?pageSize=200',{headers:{'x-goog-api-key':settings.aiKey}});
+  if(!res.ok){const e=await gErr(res);log('CHYBA','Gemini seznam modelů',e);if(res.status===400||res.status===401||res.status===403)throw{code:'key',msg:e.msg};throw e}
+  const d=await res.json();
+  const ver=n=>{const m=n.match(/gemini-(\d+)(?:\.(\d+))?/);return m?(+m[1])*100+(+(m[2]||0)):0};
+  const ok=(d.models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent')).map(m=>m.name.replace(/^models\//,''))
+    .filter(n=>/^gemini/.test(n)&&!/tts|image|live|audio|transcribe|embed|robotics|omni|translate|computer|exp/i.test(n));
+  const score=n=>ver(n)*10+(/flash/.test(n)?5:0)-(/lite/.test(n)?3:0)-(/preview/.test(n)?2:0)-(/pro/.test(n)?1:0);
+  const list=ok.sort((a,b)=>score(b)-score(a));
+  log('INFO','Gemini modely',list.slice(0,8));
+  return list;
+}
 async function gemini(parts,signal,json){
-  const models=settings.aiModel?[settings.aiModel]:DEF_MODELS;let last;
-  for(const m of models){
-    const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent`,{method:'POST',signal,headers:{'Content-Type':'application/json','x-goog-api-key':settings.aiKey},
+  let models=settings.aiModel?[settings.aiModel]:[...DEF_MODELS];let last;let listed=false;
+  for(let i=0;i<models.length;i++){const m=models[i];
+    const res=await fetch(`${GAPI}/models/${encodeURIComponent(m)}:generateContent`,{method:'POST',signal,headers:{'Content-Type':'application/json','x-goog-api-key':settings.aiKey},
       body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0,...(json?{responseMimeType:'application/json'}:{})}})});
     log('INFO','Gemini '+m,{status:res.status});
-    if(res.ok){const d=await res.json();const t=(d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts||[]).map(p=>p.text||'').join('');if(!t)throw{code:'empty'};if(!settings.aiModel&&m!==models[0]){settings.aiModel=m;saveSettings()}return t}
-    let msg='';try{msg=(await res.json()).error.message}catch(e){}
-    last={code:res.status,msg};
-    if(res.status===400&&/api key/i.test(msg))throw{code:'key',msg};
-    if(res.status===401||res.status===403)throw{code:'key',msg};
+    if(res.ok){const d=await res.json();const t=(d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts||[]).map(p=>p.text||'').join('');if(!t)throw{code:'empty',msg:'model vrátil prázdnou odpověď'};if(settings.aiModel!==m){settings.aiModel=m;saveSettings()}return t}
+    last=await gErr(res);log('CHYBA','Gemini '+m,last);
+    if(res.status===400&&/api.?key/i.test(last.msg))throw{code:'key',msg:last.msg};
+    if(res.status===401||res.status===403)throw{code:'key',msg:last.msg};
+    if(res.status===404&&!listed){listed=true;try{const l=await listModels();const rest=l.filter(x=>!models.includes(x));models.splice(i+1,0,...rest.slice(0,4))}catch(e){if(e.code==='key')throw e}}
     if(res.status!==404&&res.status!==429&&res.status<500)throw last;
   }
   throw last||{code:0};
 }
 function parseJSON(t){try{return JSON.parse(t)}catch(e){}const a=t.indexOf('{'),b=t.lastIndexOf('}');if(a>=0&&b>a)try{return JSON.parse(t.slice(a,b+1))}catch(e){}return null}
 const errTxt=e=>e==null?'':typeof e==='string'?e:(e.msg||e.message||(e.code!=null?'kód '+e.code:'')||(e.type?'událost '+e.type:'')||String(e));
-const aiErr=e=>e&&e.name==='AbortError'?'Zastaveno.':e&&e.code==='key'?'Klíč nefunguje. Zkontroluj ho v Nastavení.':e&&e.code===429?'Vyčerpaný bezplatný limit. Zkus to za chvíli nebo zítra.':e&&e.code===404?'Model není dostupný. V Nastavení nech pole Model prázdné.':!navigator.onLine?'Jsi offline. Čtení přes AI potřebuje internet.':'Přečíst fotku se nepovedlo: '+(errTxt(e)||'neznámá chyba').slice(0,160)+'. Zkus to znovu.';
+const aiErr=e=>e&&e.name==='AbortError'?'Zastaveno.':e&&e.code==='key'?'Klíč nefunguje'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'. Zkontroluj ho v Nastavení.':e&&e.code===429?'Vyčerpaný bezplatný limit'+(e.msg?' ('+String(e.msg).slice(0,120)+')':'')+'. Zkus to za chvíli nebo zítra.':e&&e.code===404?'Žádný model není pro tento klíč dostupný'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'.':!navigator.onLine?'Jsi offline. Čtení přes AI potřebuje internet.':'Přečíst fotku se nepovedlo: '+(errTxt(e)||'neznámá chyba').slice(0,160)+'. Zkus to znovu.';
 const LAYOUT_PROMPT=`Na fotkách je ručně psaná hospodská účtenka (útrata jednoho člověka). Na začátku řádku je cena v Kč (např. 55, 35, 40, 30, 28, 25, 20, 18, někdy 145 nebo 250), za ní čárky = počet kusů.
 Pravidla:
 - každá svislá čárka = 1 kus; 4 čárky přeškrtnuté pátou šikmou čárkou = 5 kusů
@@ -943,7 +958,7 @@ app.addEventListener('click',e=>{
   if(a==='savekey'){settings.aiKey=$('sk').value.trim();settings.aiModel=$('sm').value.trim();saveSettings().then(()=>{toast(settings.aiKey?'Klíč uložen':'Klíč smazán');render()});return}
   if(a==='delkey'){settings.aiKey='';saveSettings().then(()=>render());return}
   if(a==='testkey'){const k=$('kst');settings.aiKey=$('sk').value.trim();settings.aiModel=$('sm').value.trim();if(!settings.aiKey){k.className='status err';k.textContent='Nejdřív vlož klíč.';return}
-    k.className='status';k.textContent='Zkouším…';gemini([{text:'Odpověz jen slovem OK.'}],undefined,false).then(t=>{saveSettings();k.className='status ok';k.textContent='Klíč funguje ✓ (model: '+(settings.aiModel||DEF_MODELS[0])+')'},e=>{k.className='status err';k.textContent=aiErr(e)});return}
+    k.className='status';k.textContent='Zjišťuji dostupné modely…';const userModel=settings.aiModel;listModels().then(l=>{if(!userModel&&l.length)settings.aiModel=l[0];k.textContent='Zkouším model '+(settings.aiModel||DEF_MODELS[0])+'…';return gemini([{text:'Odpověz jen slovem OK.'}],undefined,false)}).then(t=>{saveSettings();k.className='status ok';k.textContent='Klíč funguje ✓ (model: '+(settings.aiModel||DEF_MODELS[0])+')'},e=>{k.className='status err';k.textContent=aiErr(e)});return}
   if(a==='sharekey'){const link=location.origin+location.pathname+'#k='+encodeURIComponent(settings.aiKey)+(settings.aiModel?'&m='+encodeURIComponent(settings.aiModel):'');
     const txt='Appka na účtenky: otevři odkaz v Safari, pak Sdílet → Přidat na plochu. AI čtení čárek je v odkazu už nastavené.\n'+link;
     if(navigator.share)navigator.share({title:'Účtenky',text:txt}).catch(()=>{});else copy(txt);return}
