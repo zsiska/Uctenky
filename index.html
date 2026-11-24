@@ -223,6 +223,22 @@ svg .mkt{font:700 .014px sans-serif;fill:#fff;stroke:none;text-anchor:middle;dom
 .apsteps li.now{color:var(--ink);font-weight:700}
 .spin{display:inline-block;width:14px;height:14px;border:3px solid var(--line);border-top-color:var(--pen);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px}
 @keyframes spin{to{transform:rotate(360deg)}}
+
+.zpbtn{font:700 30px/1.1 var(--hand);color:var(--pen);background:none;border:2px dashed var(--line);border-radius:12px;padding:2px 10px;min-height:0}
+.zpbtn.bad{border-color:var(--red);color:var(--red);background:light-dark(#fde2e4,#3a1418)}
+.zpr{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.zpr:empty{display:none}
+.zpr button{min-width:64px;min-height:54px;font-size:20px;font-weight:800}
+.zpr button.on{background:var(--penbg);color:#fff;border-color:var(--penbg)}
+#learn{position:fixed;left:12px;right:12px;bottom:calc(160px + env(safe-area-inset-bottom));z-index:60;background:#151826;color:#fff;border-radius:16px;padding:10px 10px 10px 16px;display:flex;align-items:center;gap:10px;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.35);max-width:740px;margin:0 auto}
+#learn[hidden]{display:none}
+#learn span{flex:1}
+.fixrow{display:flex;align-items:center;gap:8px;margin:6px 0;flex-wrap:wrap}
+.fixrow .mini{margin-left:auto}
+.hwgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.hw{border:1px solid var(--line);border-radius:12px;padding:8px;display:grid;gap:6px}
+.hw img{width:100%;border-radius:8px;background:#fff}
+.hw input{width:4.5em}
 </style>
 </head>
 <body class="obs">
@@ -244,6 +260,7 @@ svg .mkt{font:700 .014px sans-serif;fill:#fff;stroke:none;text-anchor:middle;dom
   <div class="zbody">
     <div class="why" id="zw"></div>
     <div class="zalts" id="zalts"></div>
+    <div class="zpr" id="zpr"></div>
     <div class="zviews">
       <button data-z="row" id="zrow">Řádek</button><button data-z="tap" id="ztap">👆 Ťukat čárky</button><button data-z="all">Celá fotka</button><button data-z="mark" id="zmarkb">✎ Označit řádek</button>
     </div>
@@ -353,6 +370,7 @@ svg .mkt{font:700 .014px sans-serif;fill:#fff;stroke:none;text-anchor:middle;dom
   <div class="df"><button id="cno" class="sp">Zrušit</button><button id="cyes" class="danger">Smazat</button></div>
 </div></dialog>
 
+<div id="learn" hidden role="status"><span id="learnt"></span><button id="learny" class="pri">Ano</button><button id="learnn">Ne</button></div>
 <div id="undo" hidden role="status"><span id="undot"></span><button id="undob">↶ Vrátit</button></div>
 <script src="app.js"></script>
 </body>

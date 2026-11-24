@@ -45,6 +45,7 @@ const getOne=(store,key)=>store==='photos'?getPhotoRec(key):getOneRaw(store,key)
 const getOneRaw=(store,key)=>memMode&&!idb?Promise.resolve(undefined):new Promise((res,rej)=>{const r=idb.transaction(store).objectStore(store).get(key);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
 
 let receipts=[],settings={email:'',prices:DEF_PRICES,aiKey:'',aiModel:'',issuer:'',issuerInfo:'',payPrefix:'',payNext:1,signature:'',eetMode:'off',eetMojeUrl:'https://eet.gov.cz',eetUrl:'',eetToken:'',eetJednotka:'',eetPokl:'',eetOvereni:false};
+let hwSamples=[];const saveHw=()=>memMode?Promise.resolve():tx('kv','readwrite',s=>s.put(hwSamples,'hw')).catch(e=>goMem(e));
 let claudeAI=null,claudeMax=0,claudeDl=null,claudeMcp=null;const hasAI=()=>!!(claudeAI||settings.aiKey);
 const DEF_MODELS=['gemini-3.8-flash','gemini-3.7-flash','gemini-3.6-flash','gemini-3.5-flash','gemini-2.5-flash'];
 let debtSel='',view='list',curId=null,curPhoto=0,filter='open',query='',person='';
@@ -271,6 +272,15 @@ function renderSettings(){
     <div class="actions" style="margin-top:10px"><button class="pri" data-a="saveset">Uložit</button></div>
   </div></div>
   <div class="card"><div class="pad">
+    <h2 style="margin:0 0 6px">Ručně psané ceny</h2>
+    <p class="note2">Ceny výše slouží i jako <b>ceník pro AI</b>. Cenu mimo ceník AI označí jako spornou a nabídne ti správnou. Když u přečteného řádku opravíš cenu, appka se zeptá „Pamatovat si to?“ a uloží pravidlo i ukázku písma.</p>
+    <label class="f">Pravidla oprav (AI přečte → správně)</label>
+    <div class="fixes">${(settings.priceFix||[]).map((f,k)=>`<div class="fixrow"><b>${esc(f.from)}</b> → <b>${esc(f.to)} Kč</b><button class="mini danger" data-a="delfix" data-k="${k}">Smazat</button></div>`).join('')||'<p class="note2">Zatím žádná.</p>'}</div>
+    <div class="fixrow"><input id="fxf" inputmode="numeric" placeholder="AI čte" style="width:6em"> → <input id="fxt" inputmode="numeric" placeholder="správně" style="width:6em"> Kč <button data-a="addfix">Přidat</button></div>
+    <label class="f">Vzory písma (posílají se AI jako ukázka)</label>
+    <div class="hwgrid">${hwSamples.map(s=>`<div class="hw"><img src="data:image/jpeg;base64,${s.img}" alt="vzor ${esc(s.price)}"><label>Je to <input inputmode="numeric" data-hwp="${esc(s.id)}" value="${esc(s.price)}"> Kč</label><button class="mini danger" data-a="delhw" data-k="${esc(s.id)}">Smazat</button></div>`).join('')||'<p class="note2">Zatím žádné – vzniknou při opravě ceny u přečteného řádku.</p>'}</div>
+  </div></div>
+  <div class="card"><div class="pad">
     <label class="chk" style="font-size:18px;font-weight:700"><input type="checkbox" id="sbig" ${settings.big!==false?'checked':''} style="width:28px;min-height:28px"> Velká tlačítka pro obsluhu</label>
     <p class="note2">Větší písmo, větší mezery a tlačítko „Vrátit“ po každém kroku.</p>
   </div></div>
@@ -387,7 +397,9 @@ function renderZoom(){
   const fl=flagList(r);const k=fl.indexOf(zCur);
   $('zprog').textContent=x.q?`Sporné místo · ${fl.length===1?'poslední':'zbývá '+fl.length}`:fl.length?`Řádek ${zCur+1} · zbývá ${fl.length} sporných`:`Řádek ${zCur+1} / ${rowsOf(r).length}`;
   $('zprog').className='zprog'+(x.q?'':' okrow');
-  $('zt').textContent=`${x.p} Kč`+(r.name?` · ${r.name}`:'');
+  $('zt').innerHTML=`<button id="zpe" class="zpbtn${x.pq?' bad':''}">${esc(x.p)} Kč ✎</button>`+(r.name?` <span class="note2" style="color:inherit">· ${esc(r.name)}</span>`:'');
+  const showP=zPrice||x.pq;const cands=[...new Set([...(x.palts||[]),...priceList()])].filter(v=>v!==+x.p);
+  $('zpr').innerHTML=showP?`<div class="note2" style="width:100%">${x.pq?'<b>Sporná cena.</b> ':''}Jaká je správná cena tohoto řádku?</div>`+[+x.p,...cands].slice(0,10).map(v=>`<button data-zp="${v}"${v===+x.p?' class="on"':''}>${v}${v===+x.p?' ✓':''}</button>`).join('')+'<button data-zp="jina">Jiná…</button>':'';
   $('zw').textContent=x.q?(x.note||'Zkontroluj počet čárek.'):'';
   $('zalts').innerHTML=x.q&&x.alts&&x.alts.length>1?x.alts.map(v=>`<button data-alt="${v}"${v===+x.c?' style="background:var(--penbg);color:#fff"':''}>${v} ks</button>`).join(''):'';
   if(zMode==='spot')zMode='row';if(zMode==='row'&&!x.box)zMode=hasPh?'mark':'row';if(zMode==='tap'&&!x.box)zMode='mark';
@@ -405,7 +417,7 @@ function renderZoom(){
   $('zok').textContent=x.q?(fl.length>1?'Sedí ✓ Další ›':'Sedí ✓ Hotovo'):(fl.length?'Další sporné ›':'Hotovo ✓');
   $('zre').hidden=!(hasAI()&&x.box&&navigator.onLine);
 }
-function openZoom(i){zCur=i;const x=rowsOf(getR(curId))[i];zMode=x&&x.box?'row':'mark';zLevel=autoZoom(getR(curId),x);tapMarks=[];tap5=false;renderZoom();if(!$('zoom').open)$('zoom').showModal()}
+function openZoom(i){zCur=i;zPrice=false;const x=rowsOf(getR(curId))[i];zMode=x&&x.box?'row':'mark';zLevel=autoZoom(getR(curId),x);tapMarks=[];tap5=false;renderZoom();if(!$('zoom').open)$('zoom').showModal()}
 function stepFlag(d){
   const r=getR(curId);const f=rowsOf(r).map((x,i)=>x.q?i:-1).filter(i=>i>=0);if(!f.length){$('zoom').close();openDone();return}
   let k=f.indexOf(zCur);if(k<0){k=f.findIndex(i=>i>zCur);if(k<0)k=0;if(d<0)k--}else k+=d;
@@ -420,11 +432,15 @@ $('zoom').addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b)return;const r=getR(curId),x=rowsOf(r)[zCur];
   if(b.dataset.z){zMode=b.dataset.z;if(zMode==='tap'){tapMarks=[];tap5=false}renderZoom();return}
   if(b.dataset.zoom){zLevel=Math.min(4,Math.max(1,zLevel+(b.dataset.zoom==='+'?1:-1)));if(zMode==='mark')zMode=x.box?'row':'all';renderZoom();return}
+  if(b.id==='zpe'){zPrice=!zPrice;renderZoom();return}
+  if(b.dataset.zp){let v=b.dataset.zp;if(v==='jina'){v=prompt('Správná cena v Kč',x.p);if(v==null)return}v=num(v);if(!v)return;
+    const old=+x.p;snap([r]);x.p=v;x.pq=0;x.palts=null;if(x.q&&!x.alts)x.q=0;zPrice=false;save(r);renderZoom();
+    if(old!==v){const from=x.pai||old;offerLearn(r,x,from,v);if(!x.ai)toast(`Cena nastavena ${v} Kč`)}return}
   if(b.dataset.alt){snap([r]);x.c=+b.dataset.alt;save(r);renderZoom();toast(`Nastaveno ${x.c} ks`);return}
   const d=b.dataset.d;if(!d)return;
   if(d==='+')x.c=(+x.c||0)+1;if(d==='-')x.c=Math.max(0,(+x.c||0)-1);if(d==='+5')x.c=(+x.c||0)+5;
   if(d==='prev')return stepFlag(-1);
-  if(d==='ok'){if(x.q){x.q=0;x.alts=null;save(r)}const f=flagList(r);if(!f.length){$('zoom').close();openDone();return}return stepFlag(1)}
+  if(d==='ok'){if(x.q||x.pq){x.q=0;x.pq=0;x.alts=null;save(r)}const f=flagList(r);if(!f.length){$('zoom').close();openDone();return}return stepFlag(1)}
   save(r);$('zc').value=x.c;$('zsub').textContent=kc((+x.p||0)*(+x.c||0));
   if(navigator.vibrate)navigator.vibrate(8);
 });
@@ -581,20 +597,46 @@ function merge(rows,A,B){rows.forEach((x,i)=>{const a=A[i],b=B[i];const c0=x.c;
   else if(x.box){x.q=1;x.note=(x.note?x.note+' · ':'')+'Řádek nebyl přepočítán zvlášť.'}
   if(x.q&&!x.spots.length&&x.box)x.spots=[x.box]})}
 /* přečte jednu fotku: vrátí řádky */
+/* ---------- ceny: ceník, pravidla oprav, vzory písma ---------- */
+const priceList=()=>(settings.prices&&settings.prices.length?settings.prices:DEF_PRICES).map(Number);
+function priceCands(p){const L=priceList();const s=String(p);const sim=q=>{const t=String(q);let d=Math.abs(t.length-s.length)*2;for(let i=0;i<Math.min(t.length,s.length);i++)if(t[t.length-1-i]!==s[s.length-1-i])d++;return d};
+  return L.filter(q=>q!==p).sort((a,b)=>sim(a)-sim(b)||Math.abs(a-p)-Math.abs(b-p)).slice(0,4)}
+function fixPrices(rows){const F=settings.priceFix||[];const L=priceList();
+  rows.forEach(x=>{const f=F.find(f=>+f.from===+x.p);if(f){x.note=(x.note?x.note+' · ':'')+`Cena opravena ${x.p} → ${f.to} (tvé pravidlo)`;x.p=+f.to;x.pq=0;return}
+    if(x.pq||(L.length&&!L.includes(+x.p))){x.q=1;x.pq=1;x.palts=[...new Set([...(x.palts||[]),...priceCands(+x.p)])].filter(v=>v!==+x.p&&v>0).slice(0,5);
+      x.note=`Sporná cena: AI přečetla ${x.p} Kč`+(L.includes(+x.p)?'':' (není v ceníku)')+'. Vyber správnou cenu.'+(x.note?' · '+x.note:'')}})}
+async function priceCropB64(r,x){try{const p=(r.photos||[])[x.ph||0];if(!p||!x.box)return null;const rec=await getOne('photos',p.id);if(!rec)return null;
+  const img=await imgFromBlob(rec.blob);const W=img.naturalWidth,Hh=img.naturalHeight;const b=x.box;const h=(b[3]-b[1])*Hh;
+  const sx=Math.max(0,(b[0]-.01)*W),sy=Math.max(0,(b[1]-.01)*Hh),sw=Math.min((b[2]-b[0])*W,Math.max(h*3.2,W*.18)),sh=Math.min(Hh-sy,h+.02*Hh);
+  const c=document.createElement('canvas');const s=Math.min(1,320/sw);c.width=Math.round(sw*s);c.height=Math.round(sh*s);c.getContext('2d').drawImage(img,sx,sy,sw,sh,0,0,c.width,c.height);
+  return c.toDataURL('image/jpeg',.82).split(',')[1]}catch(e){log('VAROV','výřez ceny selhal',errInfo(e));return null}}
+let learnT=null,zPrice=false;
+function offerLearn(r,x,from,to){if(!x.ai||!from||!to||+from===+to)return;const el=$('learn');(document.querySelector('dialog[open]')||document.body).appendChild(el);
+  $('learnt').textContent=`AI přečetla ${from}, správně je ${to}. Pamatovat si to?`;el.hidden=false;clearTimeout(learnT);learnT=setTimeout(()=>el.hidden=true,12000);
+  $('learny').onclick=async()=>{el.hidden=true;const F=(settings.priceFix||[]).filter(f=>+f.from!==+from);
+    if(!priceList().includes(+from))F.push({from:+from,to:+to});settings.priceFix=F;saveSettings();
+    const b=await priceCropB64(r,x);if(b){hwSamples.push({id:Date.now().toString(36),price:+to,read:+from,img:b});hwSamples=hwSamples.slice(-24);saveHw()}
+    toast(priceList().includes(+from)?`Uložen vzor písma ${to} Kč (${from} je v ceníku, pravidlo nedělám)`:`Zapamatováno: ${from} → ${to}`+(b?' + vzor písma':''))};
+  $('learnn').onclick=()=>{el.hidden=true}}
+function hwParts(){if(!settings.aiKey||!hwSamples.length)return[];const ps=[{text:'VZORY PÍSMA tohoto číšníka (jen pro rozpoznání číslic cen, nic z nich nepočítej a nezahrnuj do rows):'}];
+  const seen={};for(const s of [...hwSamples].reverse()){if((seen[s.price]=(seen[s.price]||0)+1)>2)continue;ps.push({text:`Vzor písma: ${s.price} Kč`+(s.read&&s.read!==s.price?` (dřív chybně čteno jako ${s.read})`:'')});ps.push({inline_data:{mime_type:'image/jpeg',data:s.img}});if(ps.length>25)break}
+  return ps}
 async function readPhoto(pid,ph,status,signal){
   const rec=await getOne('photos',pid);if(!rec)throw{code:'empty',msg:'Fotka chybí'};
   status('Připravuji fotku…',0);
   const {blob}=await shrink(rec.blob,1600,.88);const img=await imgFromBlob(blob);
   const lim=claudeAI&&!settings.aiKey?claudeMax:4;const strips=lim>=4?[[0,.4],[.3,.7],[.6,1]]:lim>=3?[[0,.55],[.45,1]]:[];
   const stripTxt=strips.length?'Obrázek 1 je celá fotka. '+strips.map((s,i)=>`Obrázek ${i+2} je výřez celé šířky ve vyšším rozlišení, výška ${String(s[0]).replace('.',',')}–${String(s[1]).replace('.',',')}`).join('; ')+' (zlomky výšky celé fotky). Překryvy nepočítej dvakrát.':'Obrázek 1 je celá fotka.';
-  const prompt=LAYOUT_PROMPT.replace(/Obrázek 1 je celá fotka\.[^\n]*/,stripTxt);
+  const F=settings.priceFix||[];
+  const prompt=LAYOUT_PROMPT.replace(/Obrázek 1 je celá fotka\.[^\n]*/,stripTxt)+`\nCENÍK této hospody: ${priceList().join(', ')} Kč. Cena mimo ceník je možná, ale nejspíš špatně přečtená – pak nastav "price_uncertain": true a do "price_alts" dej 1–3 ceny z ceníku, které tak mohou vypadat.`+(F.length?`\nZnámé záměny tohoto písma: ${F.map(f=>f.from+' je ve skutečnosti '+f.to).join('; ')}.`:'')+`\nU každého řádku uveď i "price_uncertain" (true/false) a "price_alts" ([]).`;
   const parts=[{text:prompt},{inline_data:{mime_type:'image/jpeg',data:await b64(blob)}}];
   for(const [a,b] of strips)parts.push({inline_data:{mime_type:'image/jpeg',data:await b64(await cropBlob(img,a,b))}});
+  parts.push(...hwParts());
   log('INFO','čtení: obrázky připraveny',{full:Math.round(blob.size/1024)+'kB',w:img.naturalWidth,h:img.naturalHeight,pruhy:strips.length});
   status('Hledám řádky a ceny…',1);
   const data=parseJSON(await aiCall(parts,signal,true));
   const rows=(data&&Array.isArray(data.rows)?data.rows:[]).map(x=>({p:num(x.price),c:num(x.count),q:x.uncertain?1:0,note:String(x.note||'').slice(0,200),
-    box:Array.isArray(x.box)&&x.box.length===4?x.box.map(clamp01):null,spots:Array.isArray(x.spot)&&x.spot.length===4?[x.spot.map(clamp01)]:[],ph,ai:1})).filter(x=>x.p||x.c);
+    box:Array.isArray(x.box)&&x.box.length===4?x.box.map(clamp01):null,spots:Array.isArray(x.spot)&&x.spot.length===4?[x.spot.map(clamp01)]:[],ph,ai:1,pai:num(x.price),pq:x.price_uncertain?1:0,palts:Array.isArray(x.price_alts)?x.price_alts.map(num).filter(Boolean):[]})).filter(x=>x.p||x.c);
   log('INFO','čtení: řádky z 1. průchodu',rows.map(x=>[x.p,x.c,x.box?x.box.map(v=>+v.toFixed(2)):null]));
   if(!rows.length)throw{code:'empty',msg:'Na fotce jsem nenašel žádné řádky'};
   status('Připravuji výřezy řádků…',2);const mid=(await shrink(rec.blob,2000,.9)).blob;const fimg=await imgFromBlob(mid);const crops=[];for(const x of rows)crops.push(x.box?await cropRow(fimg,x.box):null);
@@ -604,7 +646,7 @@ async function readPhoto(pid,ph,status,signal){
     rs.forEach((x,k)=>{if(x.status==='rejected')log('VAROV','přepočet '+(k+1)+' selhal – beru výsledek bez něj',errInfo(x.reason))});
     A=rs[0].status==='fulfilled'?rs[0].value:{};B=rs[1].status==='fulfilled'?rs[1].value:{}}
   status('Hotovo',3);
-  log('INFO','čtení: přepočty',{A,B});merge(rows,A,B);log('INFO','čtení: výsledek',rows.map(x=>[x.p,x.c,x.q?'?':'ok']));return rows;
+  log('INFO','čtení: přepočty',{A,B});merge(rows,A,B);fixPrices(rows);log('INFO','čtení: výsledek',rows.map(x=>[x.p,x.c,x.q?'?':'ok']));return rows;
 }
 /* jeden řádek znovu (ze zvětšení) */
 async function recountRow(r,i,status){
@@ -958,11 +1000,12 @@ app.addEventListener('change',async e=>{
   if(t.id==='camq'||t.id==='galq'){const fs=[...t.files];t.value='';if(!fs.length)return;await quickCapture(fs[0]);return}
   const r=getR(curId);
   if(t.dataset.up){const fs=[...t.files];t.value='';if(fs.length)await addPhotos(fs);return}
+  if(t.dataset.hwp){const s=hwSamples.find(s=>s.id===t.dataset.hwp);if(s){s.price=num(t.value);saveHw();toast('Vzor upraven')}return}
   if(t.id==='sbig'){settings.big=t.checked;document.body.classList.toggle('obs',t.checked);saveSettings();return}
   if(t.id==='em'){settings.eetMode=t.value;saveSettings();render();return}
   if(t.dataset.import!=null){const f=t.files[0];t.value='';if(f)importBackup(f);return}
   if(t.dataset.r&&r){r[t.dataset.r]=t.dataset.r==='name'?t.value.trim():t.value;save(r);render();if(t.dataset.r==='name'&&r.name){const d=debtOf(personOf(r));toast(d.over?`⚠ ${r.name} už dluží ${kc(d.due)}${d.lim?' (limit '+kc(d.lim)+')':''}`:'Uloženo pod jménem '+r.name,d.over)}return}
-  if(t.dataset.f&&r){const x=rowsOf(r)[+t.closest('.row').dataset.i];x[t.dataset.f]=t.dataset.f==='note'?t.value:num(t.value);save(r);render()}
+  if(t.dataset.f&&r){const x=rowsOf(r)[+t.closest('.row').dataset.i];const old=x.p;x[t.dataset.f]=t.dataset.f==='note'?t.value:num(t.value);if(t.dataset.f==='p'&&+old!==+x.p){x.pq=0;offerLearn(r,x,x.pai||old,x.p)}save(r);render()}
 });
 app.addEventListener('click',e=>{
   const rc=e.target.closest('rect[data-i]');if(rc){openZoom(+rc.dataset.i);return}
@@ -989,6 +1032,9 @@ app.addEventListener('click',e=>{
   if(a==='copysum'){copy(summaryText(receipts.filter(byFilter)));return}
   if(a==='delr'){ask('Smazat účtenku?',`Účtenka „${r.name||'Bez jména'}“ ${kc(totR(r)[1])} i její fotky se smažou natrvalo.`,'Ano, smazat',async()=>{receipts=receipts.filter(x=>x.id!==r.id);try{await tx('receipts','readwrite',s=>s.delete(r.id))}catch(e){}for(const p of r.photos||[])await delPhotoData(p.id);view='list';render();toast('Účtenka smazána')});return}
   if(a==='delphoto'){ask('Smazat fotku?','Fotka se smaže natrvalo. Řádky zůstanou, jen bez vyznačení na fotce.','Smazat',async()=>{const p=r.photos[curPhoto];r.photos=r.photos.filter((_,i)=>i!==curPhoto);r.rows=rowsOf(r).map(x=>{if((x.ph||0)===curPhoto)return{...x,box:null,spots:[]};if((x.ph||0)>curPhoto)return{...x,ph:x.ph-1};return x});if(p)await delPhotoData(p.id);curPhoto=0;save(r);render()});return}
+  if(a==='addfix'){const f=num($('fxf').value),t=num($('fxt').value);if(!f||!t||f===t){toast('Vyplň obě ceny',true);return}settings.priceFix=[...(settings.priceFix||[]).filter(x=>+x.from!==f),{from:f,to:t}];saveSettings();toast(`Pravidlo ${f} → ${t} přidáno`);render();return}
+  if(a==='delfix'){settings.priceFix=(settings.priceFix||[]).filter((_,k)=>k!==+b.dataset.k);saveSettings();render();return}
+  if(a==='delhw'){hwSamples=hwSamples.filter(s=>s.id!==b.dataset.k);saveHw();render();return}
   if(a==='saveset'){settings.email=$('se').value.trim();settings.prices=$('sp').value.split(/[,;\s]+/).map(num).filter(Boolean);if(!settings.prices.length)settings.prices=DEF_PRICES;saveSettings().then(()=>toast('Uloženo'));render();return}
   if(a==='export'){exportBackup();return}
   if(a==='copylog'){copy(logText());return}
@@ -1038,7 +1084,7 @@ addEventListener('online',()=>render());addEventListener('offline',()=>render())
 
 /* ---------- boot ---------- */
 (async()=>{
-  try{idb=await openDB();receipts=(await getAll('receipts')).map(syncR);const s=await getOne('kv','settings');if(s)settings={...settings,...s};await preloadURLs()}
+  try{idb=await openDB();receipts=(await getAll('receipts')).map(syncR);const s=await getOne('kv','settings');if(s)settings={...settings,...s};try{hwSamples=(await getOne('kv','hw'))||[]}catch(e){hwSamples=[]}await preloadURLs()}
   catch(e){log('CHYBA','IndexedDB nedostupná',errInfo(e));idb=null;memMode=true;receipts=[]}
   const h=new URLSearchParams(location.hash.slice(1));
   if(h.get('k')){settings.aiKey=h.get('k');if(h.get('m'))settings.aiModel=h.get('m');await saveSettings();setTimeout(()=>toast('Čtení čárek přes AI je nastavené ✓'),300)}
