@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=29;
+const APP_VER=30;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -583,7 +583,8 @@ async function listModels(){
   return list;
 }
 let aiChunk=null,lastModel=''; /* callback(znaků) pro průběh */
-function thinkCfg(m){if(settings.noThink)return{};if(/gemini-[3-9]/.test(m))return{thinkingConfig:{thinkingLevel:'low'}};if(/gemini-2\.5-flash/.test(m))return{thinkingConfig:{thinkingBudget:0}};return{}}
+function thinkCfg(m){const mr=settings.noMediaRes?{}:{mediaResolution:'MEDIA_RESOLUTION_HIGH'};if(settings.noThink)return mr;if(/gemini-[3-9]/.test(m))return{...mr,thinkingConfig:{thinkingLevel:'low'}};if(/gemini-2\.5-flash/.test(m))return{...mr,thinkingConfig:{thinkingBudget:0}};return mr}
+function thinkCfg_old(m){if(settings.noThink)return{};if(/gemini-[3-9]/.test(m))return{thinkingConfig:{thinkingLevel:'low'}};if(/gemini-2\.5-flash/.test(m))return{thinkingConfig:{thinkingBudget:0}};return{}}
 async function readSSE(res,onChunk){
   const rd=res.body.getReader();const dec=new TextDecoder();let buf='',txt='';
   for(;;){const {done,value}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let k;
@@ -612,6 +613,7 @@ async function gemini(parts,signal,json){
       /* přetížený model: 2× počkat a zkusit znovu, pak jiný model */
       const n=waited[m]||0;if(n<2){waited[m]=n+1;const w=n?10:4;log('INFO','model přetížený – čekám',{s:w,model:m});await pause(w);i--;continue}
       await more(false);continue}
+    if(st===400&&/media.?resolution/i.test(last.msg)&&!settings.noMediaRes){settings.noMediaRes=true;saveSettings();i--;continue}
     if(st===400&&/think/i.test(last.msg)&&!triedNoThink){triedNoThink=true;settings.noThink=true;saveSettings();i--;continue}
     if(st===400&&/api.?key/i.test(last.msg))throw{code:'key',msg:last.msg};
     if(st===401||st===403)throw{code:'key',msg:last.msg};
@@ -652,6 +654,17 @@ Ke každému výřezu vrať i SKUPINY, jak jsi je počítal zleva doprava: "grou
 Nejasná místa dej do "bad":[{"x":0.62,"why":"krátce česky, např. dvě čárky splývají"}].
 Pokud ve výřezu vidíš na začátku jiného řádku nebo jiné skupiny JINOU napsanou cenu než vyznačenou (výřez zabírá víc položek), vypiš ji do "other_prices":[18,35] a počítej jen čárky k vyznačené ceně.
 Odpověz POUZE JSONem: {"counts":[{"id":1,"count":13,"groups":[{"x":0.2,"n":5},{"x":0.4,"n":5},{"x":0.58,"n":3}],"bad":[],"uncertain":false,"note":""}]} – id je číslo výřezu.`;
+/* Gemini zná rámečky nativně jako box_2d [ymin,xmin,ymax,xmax] v 0–1000 */
+const G_BOX=()=>!!settings.aiKey;
+function toGbox(p){if(!G_BOX())return p;return p
+  .replace(/"box":\[x1,y1,x2,y2\],"spot":null/g,'"box_2d":[ymin,xmin,ymax,xmax],"spot_2d":null')
+  .replace(/"box":\[0\.02,0\.1,0\.4,0\.35\]/g,'"box_2d":[100,20,350,400]')
+  .replace(/box a spot jsou souřadnice v CELÉ fotce jako zlomky 0–1 \(x zleva, y shora\)\./,'box_2d a spot_2d jsou rámečky ve formátu [ymin, xmin, ymax, xmax] v rozsahu 0–1000 vzhledem k celé fotce. Rámeček ať těsně obsahuje cenu i všechny její čárky a jen jeden řádek (jednu položku).')
+  .replace(/box \[x1,y1,x2,y2\] jako zlomky TOHOTO VÝŘEZU \(0–1, x zleva, y shora\)/,'box_2d [ymin, xmin, ymax, xmax] v rozsahu 0–1000 vzhledem k TOMUTO výřezu')
+  .replace(/do "spot" dej rámeček/,'do "spot_2d" dej rámeček')}
+function readBox(x){const b=x.box_2d,a=x.box;if(Array.isArray(b)&&b.length===4){const v=b.map(n=>clamp01((+n||0)/1000));return[Math.min(v[1],v[3]),Math.min(v[0],v[2]),Math.max(v[1],v[3]),Math.max(v[0],v[2])]}
+  if(Array.isArray(a)&&a.length===4){const big=a.some(n=>+n>1.5);return a.map(n=>clamp01(big?(+n||0)/1000:n))}return null}
+function readSpot(x){const s=x.spot_2d||x.spot;return Array.isArray(s)&&s.length===4?readBox(x.spot_2d?{box_2d:s}:{box:s}):null}
 const clamp01=n=>Math.min(1,Math.max(0,+n||0));
 async function imgFromBlob(b){const u=URL.createObjectURL(b);try{return await loadImg(u)}finally{URL.revokeObjectURL(u)}}
 async function cropRow(fimg,box){const W=fimg.naturalWidth,Hh=fimg.naturalHeight,m=.015;const x1=clamp01(box[0]-m),y1=clamp01(box[1]-m),x2=clamp01(box[2]+m),y2=clamp01(box[3]+m);
@@ -663,7 +676,7 @@ async function countPass(rows,crops,order,signal){
   for(let k=0;k<order.length;k++){const i=order[k];ps.push({text:`Výřez ${k+1}: cena ${rows[i].p} Kč${rows[i].note?' ('+rows[i].note+')':''}`});ps.push({inline_data:{mime_type:'image/jpeg',data:await b64(crops[i])}})}
   const d=parseJSON(await aiCall(ps,signal,true));const out={};
   (d&&Array.isArray(d.counts)?d.counts:[]).forEach(c=>{const k=num(c.id)-1;const i=order[k];if(i==null)return;const bx=rows[i].box;
-    const mx=v=>{if(!bx)return null;const x1=clamp01(bx[0]-.015),x2=clamp01(bx[2]+.015);return +(x1+(x2-x1)*clamp01(v)).toFixed(4)};
+    const mx=v=>{if(!bx)return null;const x1=clamp01(bx[0]-.015),x2=clamp01(bx[2]+.015);return +(x1+(x2-x1)*clamp01(+v>1.5?(+v)/1000:v)).toFixed(4)};
     const g=(Array.isArray(c.groups)?c.groups:[]).map(z=>[mx(z.x),num(z.n)]).filter(z=>z[0]!=null&&z[1]>0).sort((a,b)=>a[0]-b[0]);
     const bad=(Array.isArray(c.bad)?c.bad:[]).map(z=>[mx(z.x),String(z.why||'').slice(0,80)]).filter(z=>z[0]!=null);
     const op=(Array.isArray(c.other_prices)?c.other_prices:[]).map(num).filter(v=>v>0);out[i]={c:num(c.count),q:!!c.uncertain||bad.length>0,n:String(c.note||''),g,bad,op}});
@@ -703,19 +716,19 @@ function hwParts(){if(!settings.aiKey||!hwSamples.length)return[];const ps=[{tex
 async function readPhoto(pid,ph,status,signal){
   const rec=await getOne('photos',pid);if(!rec)throw{code:'empty',msg:'Fotka chybí'};
   status('Připravuji fotku…',0);
-  const {blob}=await shrink(rec.blob,1600,.88);const img=await imgFromBlob(blob);
-  const lim=claudeAI&&!settings.aiKey?claudeMax:4;const strips=lim>=4?[[0,.4],[.3,.7],[.6,1]]:lim>=3?[[0,.55],[.45,1]]:[];
+  const {blob}=await shrink(rec.blob,settings.aiKey?2400:1600,.88);const img=await imgFromBlob(blob);
+  const lim=settings.aiKey?1:claudeAI?claudeMax:4;const strips=lim>=4?[[0,.4],[.3,.7],[.6,1]]:lim>=3?[[0,.55],[.45,1]]:[];
   const stripTxt=strips.length?'Obrázek 1 je celá fotka. '+strips.map((s,i)=>`Obrázek ${i+2} je výřez celé šířky ve vyšším rozlišení, výška ${String(s[0]).replace('.',',')}–${String(s[1]).replace('.',',')}`).join('; ')+' (zlomky výšky celé fotky). Překryvy nepočítej dvakrát.':'Obrázek 1 je celá fotka.';
   const F=settings.priceFix||[];
-  const prompt=LAYOUT_PROMPT.replace(/Obrázek 1 je celá fotka\.[^\n]*/,stripTxt)+`\nCENÍK této hospody: ${priceList().join(', ')} Kč. Cena mimo ceník je možná, ale nejspíš špatně přečtená – pak nastav "price_uncertain": true a do "price_alts" dej 1–3 ceny z ceníku, které tak mohou vypadat.`+(F.length?`\nZnámé záměny tohoto písma: ${F.map(f=>f.from+' je ve skutečnosti '+f.to).join('; ')}.`:'')+`\nU každého řádku uveď i "price_uncertain" (true/false) a "price_alts" ([]).`;
+  const prompt=toGbox(LAYOUT_PROMPT).replace(/Obrázek 1 je celá fotka\.[^\n]*/,stripTxt)+`\nCENÍK této hospody: ${priceList().join(', ')} Kč. Cena mimo ceník je možná, ale nejspíš špatně přečtená – pak nastav "price_uncertain": true a do "price_alts" dej 1–3 ceny z ceníku, které tak mohou vypadat.`+(F.length?`\nZnámé záměny tohoto písma: ${F.map(f=>f.from+' je ve skutečnosti '+f.to).join('; ')}.`:'')+`\nU každého řádku uveď i "price_uncertain" (true/false) a "price_alts" ([]).`;
   const parts=[{text:prompt},{inline_data:{mime_type:'image/jpeg',data:await b64(blob)}}];
   for(const [a,b] of strips)parts.push({inline_data:{mime_type:'image/jpeg',data:await b64(await cropBlob(img,a,b))}});
   parts.push(...hwParts());
   log('INFO','čtení: obrázky připraveny',{full:Math.round(blob.size/1024)+'kB',w:img.naturalWidth,h:img.naturalHeight,pruhy:strips.length});
   status('Hledám řádky a ceny…',1);
-  const data=parseJSON(await aiCall(parts,signal,true));
+  const raw=await aiCall(parts,signal,true);log('INFO','čtení: odpověď AI (řádky)',String(raw).slice(0,1800));const data=parseJSON(raw);
   const rows=(data&&Array.isArray(data.rows)?data.rows:[]).map(x=>({p:num(x.price),c:num(x.count),q:x.uncertain?1:0,note:String(x.note||'').slice(0,200),
-    box:Array.isArray(x.box)&&x.box.length===4?x.box.map(clamp01):null,spots:Array.isArray(x.spot)&&x.spot.length===4?[x.spot.map(clamp01)]:[],ph,ai:1,pai:num(x.price),pq:x.price_uncertain?1:0,palts:Array.isArray(x.price_alts)?x.price_alts.map(num).filter(Boolean):[]})).filter(x=>x.p||x.c);
+    box:readBox(x),spots:readSpot(x)?[readSpot(x)]:[],ph,ai:1,pai:num(x.price),pq:x.price_uncertain?1:0,palts:Array.isArray(x.price_alts)?x.price_alts.map(num).filter(Boolean):[]})).filter(x=>x.p||x.c);
   log('INFO','čtení: řádky z 1. průchodu',rows.map(x=>[x.p,x.c,x.box?x.box.map(v=>+v.toFixed(2)):null]));
   if(!rows.length)throw{code:'empty',msg:'Na fotce jsem nenašel žádné řádky'};
   status('Připravuji výřezy řádků…',2);const mid=(await shrink(rec.blob,2400,.9)).blob;const fimg=await imgFromBlob(mid);
@@ -741,9 +754,9 @@ Odpověz POUZE JSONem: {"rows":[{"price":18,"count":5,"box":[0.02,0.1,0.4,0.35],
 async function regionRows(fimg,box,ph,signal){const m=.012;const x1=clamp01(box[0]-m),y1=clamp01(box[1]-m),x2=clamp01(box[2]+m),y2=clamp01(box[3]+m);
   const W=fimg.naturalWidth,Hh=fimg.naturalHeight;const c=document.createElement('canvas');const sw=(x2-x1)*W,sh=(y2-y1)*Hh;const s=Math.min(1.5,1400/sw);
   c.width=Math.max(1,Math.round(sw*s));c.height=Math.max(1,Math.round(sh*s));c.getContext('2d').drawImage(fimg,x1*W,y1*Hh,sw,sh,0,0,c.width,c.height);
-  const blob=await canvasBlob(c,.9);const ps=[{text:REGION_PROMPT()},{inline_data:{mime_type:'image/jpeg',data:await b64(blob)}},...hwParts()];
-  const d=parseJSON(await aiCall(ps,signal,true));const mp=b=>[x1+(x2-x1)*clamp01(b[0]),y1+(y2-y1)*clamp01(b[1]),x1+(x2-x1)*clamp01(b[2]),y1+(y2-y1)*clamp01(b[3])].map(v=>+v.toFixed(4));
-  const rows=(d&&Array.isArray(d.rows)?d.rows:[]).filter(x=>Array.isArray(x.box)&&x.box.length===4&&num(x.price)>0).map(x=>({p:num(x.price),c:num(x.count),q:x.uncertain?1:0,note:String(x.note||'').slice(0,200),box:mp(x.box),spots:[],ph,ai:1,pai:num(x.price),pq:x.price_uncertain?1:0,palts:Array.isArray(x.price_alts)?x.price_alts.map(num).filter(Boolean):[],split:1}));
+  const blob=await canvasBlob(c,.9);const ps=[{text:toGbox(REGION_PROMPT())},{inline_data:{mime_type:'image/jpeg',data:await b64(blob)}},...hwParts()];
+  const raw=await aiCall(ps,signal,true);log('INFO','oblast: odpověď AI',String(raw).slice(0,1200));const d=parseJSON(raw);const mp=b=>[x1+(x2-x1)*clamp01(b[0]),y1+(y2-y1)*clamp01(b[1]),x1+(x2-x1)*clamp01(b[2]),y1+(y2-y1)*clamp01(b[3])].map(v=>+v.toFixed(4));
+  const rows=(d&&Array.isArray(d.rows)?d.rows:[]).filter(x=>readBox(x)&&num(x.price)>0).map(x=>({p:num(x.price),c:num(x.count),q:x.uncertain?1:0,note:String(x.note||'').slice(0,200),box:mp(readBox(x)),spots:[],ph,ai:1,pai:num(x.price),pq:x.price_uncertain?1:0,palts:Array.isArray(x.price_alts)?x.price_alts.map(num).filter(Boolean):[],split:1}));
   rows.sort((a,b)=>(a.box[1]-b.box[1])||(a.box[0]-b.box[0]));log('INFO','oblast: rozděleno',rows.map(x=>[x.p,x.c]));return rows}
 /* dvojí přepočet řádků + sloučení + úklid */
 async function countRows(rows,fimg,signal,status){
