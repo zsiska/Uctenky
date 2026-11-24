@@ -466,10 +466,19 @@ async function aiCall(parts,signal,json){
 }
 const maxImgs=()=>claudeAI&&!settings.aiKey?Math.max(2,claudeMax-1):30;
 const GAPI='https://generativelanguage.googleapis.com/v1beta';
+/* fetch na Google: nejdřív s klíčem v hlavičce, při síťové chybě (Safari „Load failed“) znovu s klíčem v adrese */
+async function gfetch(url,opt={}){
+  try{return await fetch(url,{...opt,headers:{...(opt.headers||{}),'x-goog-api-key':settings.aiKey}})}
+  catch(e){if(e&&e.name==='AbortError')throw e;log('VAROV','Google fetch (hlavička) selhal',errInfo(e));
+    const h={...(opt.headers||{})};
+    try{return await fetch(url+(url.includes('?')?'&':'?')+'key='+encodeURIComponent(settings.aiKey),{...opt,headers:h})}
+    catch(e2){if(e2&&e2.name==='AbortError')throw e2;log('CHYBA','Google fetch (key v adrese) selhal',errInfo(e2));
+      throw{code:'net',msg:navigator.onLine?'Google spojení odmítl. Nejčastěji je to neplatným nebo nepovoleným klíčem':'Jsi offline'}}}
+}
 async function gErr(res){let msg='';try{const d=await res.json();msg=(d.error&&(d.error.status?d.error.status+': ':'')+(d.error.message||''))||''}catch(e){}return{code:res.status,msg}}
 /* zjistí modely, které klíč smí použít, a seřadí je od nejlepšího */
 async function listModels(){
-  const res=await fetch(GAPI+'/models?pageSize=200',{headers:{'x-goog-api-key':settings.aiKey}});
+  const res=await gfetch(GAPI+'/models?pageSize=200');
   if(!res.ok){const e=await gErr(res);log('CHYBA','Gemini seznam modelů',e);if(res.status===400||res.status===401||res.status===403)throw{code:'key',msg:e.msg};throw e}
   const d=await res.json();
   const ver=n=>{const m=n.match(/gemini-(\d+)(?:\.(\d+))?/);return m?(+m[1])*100+(+(m[2]||0)):0};
@@ -483,7 +492,7 @@ async function listModels(){
 async function gemini(parts,signal,json){
   let models=settings.aiModel?[settings.aiModel]:[...DEF_MODELS];let last;let listed=false;
   for(let i=0;i<models.length;i++){const m=models[i];
-    const res=await fetch(`${GAPI}/models/${encodeURIComponent(m)}:generateContent`,{method:'POST',signal,headers:{'Content-Type':'application/json','x-goog-api-key':settings.aiKey},
+    const res=await gfetch(`${GAPI}/models/${encodeURIComponent(m)}:generateContent`,{method:'POST',signal,headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0,...(json?{responseMimeType:'application/json'}:{})}})});
     log('INFO','Gemini '+m,{status:res.status});
     if(res.ok){const d=await res.json();const t=(d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts||[]).map(p=>p.text||'').join('');if(!t)throw{code:'empty',msg:'model vrátil prázdnou odpověď'};if(settings.aiModel!==m){settings.aiModel=m;saveSettings()}return t}
@@ -497,7 +506,7 @@ async function gemini(parts,signal,json){
 }
 function parseJSON(t){try{return JSON.parse(t)}catch(e){}const a=t.indexOf('{'),b=t.lastIndexOf('}');if(a>=0&&b>a)try{return JSON.parse(t.slice(a,b+1))}catch(e){}return null}
 const errTxt=e=>e==null?'':typeof e==='string'?e:(e.msg||e.message||(e.code!=null?'kód '+e.code:'')||(e.type?'událost '+e.type:'')||String(e));
-const aiErr=e=>e&&e.name==='AbortError'?'Zastaveno.':e&&e.code==='key'?'Klíč nefunguje'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'. Zkontroluj ho v Nastavení.':e&&e.code===429?'Vyčerpaný bezplatný limit'+(e.msg?' ('+String(e.msg).slice(0,120)+')':'')+'. Zkus to za chvíli nebo zítra.':e&&e.code===404?'Žádný model není pro tento klíč dostupný'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'.':!navigator.onLine?'Jsi offline. Čtení přes AI potřebuje internet.':'Přečíst fotku se nepovedlo: '+(errTxt(e)||'neznámá chyba').slice(0,160)+'. Zkus to znovu.';
+const aiErr=e=>e&&e.name==='AbortError'?'Zastaveno.':e&&e.code==='net'?e.msg+(/^AIza/.test(settings.aiKey||'')?'.':'. Klíč Gemini má začínat „AIza“ – vytvoř nový na aistudio.google.com/app/apikey.'):e&&e.code==='key'?'Klíč nefunguje'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'. Zkontroluj ho v Nastavení.':e&&e.code===429?'Vyčerpaný bezplatný limit'+(e.msg?' ('+String(e.msg).slice(0,120)+')':'')+'. Zkus to za chvíli nebo zítra.':e&&e.code===404?'Žádný model není pro tento klíč dostupný'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'.':!navigator.onLine?'Jsi offline. Čtení přes AI potřebuje internet.':'Přečíst fotku se nepovedlo: '+(errTxt(e)||'neznámá chyba').slice(0,160)+'. Zkus to znovu.';
 const LAYOUT_PROMPT=`Na fotkách je ručně psaná hospodská účtenka (útrata jednoho člověka). Na začátku řádku je cena v Kč (např. 55, 35, 40, 30, 28, 25, 20, 18, někdy 145 nebo 250), za ní čárky = počet kusů.
 Pravidla:
 - každá svislá čárka = 1 kus; 4 čárky přeškrtnuté pátou šikmou čárkou = 5 kusů
@@ -958,7 +967,7 @@ app.addEventListener('click',e=>{
   if(a==='savekey'){settings.aiKey=$('sk').value.trim();settings.aiModel=$('sm').value.trim();saveSettings().then(()=>{toast(settings.aiKey?'Klíč uložen':'Klíč smazán');render()});return}
   if(a==='delkey'){settings.aiKey='';saveSettings().then(()=>render());return}
   if(a==='testkey'){const k=$('kst');settings.aiKey=$('sk').value.trim();settings.aiModel=$('sm').value.trim();if(!settings.aiKey){k.className='status err';k.textContent='Nejdřív vlož klíč.';return}
-    k.className='status';k.textContent='Zjišťuji dostupné modely…';const userModel=settings.aiModel;listModels().then(l=>{if(!userModel&&l.length)settings.aiModel=l[0];k.textContent='Zkouším model '+(settings.aiModel||DEF_MODELS[0])+'…';return gemini([{text:'Odpověz jen slovem OK.'}],undefined,false)}).then(t=>{saveSettings();k.className='status ok';k.textContent='Klíč funguje ✓ (model: '+(settings.aiModel||DEF_MODELS[0])+')'},e=>{k.className='status err';k.textContent=aiErr(e)});return}
+    k.className='status';k.textContent='Zjišťuji dostupné modely…';const userModel=settings.aiModel;listModels().then(l=>{if(!userModel&&l.length)settings.aiModel=l[0];k.textContent='Zkouším model '+(settings.aiModel||DEF_MODELS[0])+'…';return gemini([{text:'Odpověz jen slovem OK.'}],undefined,false)}).then(t=>{saveSettings();k.className='status ok';k.textContent='Klíč funguje ✓ (model: '+(settings.aiModel||DEF_MODELS[0])+')'},e=>{k.className='status err';k.textContent=aiErr(e).replace('Přečíst fotku se nepovedlo','Test klíče selhal')});return}
   if(a==='sharekey'){const link=location.origin+location.pathname+'#k='+encodeURIComponent(settings.aiKey)+(settings.aiModel?'&m='+encodeURIComponent(settings.aiModel):'');
     const txt='Appka na účtenky: otevři odkaz v Safari, pak Sdílet → Přidat na plochu. AI čtení čárek je v odkazu už nastavené.\n'+link;
     if(navigator.share)navigator.share({title:'Účtenky',text:txt}).catch(()=>{});else copy(txt);return}
