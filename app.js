@@ -506,31 +506,37 @@ async function readSSE(res,onChunk){
   return txt;
 }
 async function gemini(parts,signal,json){
-  let models=settings.aiModel?[settings.aiModel]:[...DEF_MODELS];let last;let listed=false;let triedNoThink=false;const waited={};let q429=null;
+  let models=settings.aiModel?[settings.aiModel]:[...DEF_MODELS];let last;let listed=false;let triedNoThink=false;const waited={};let q429=null,busy=null;
+  const pause=async w=>{aiChunk&&aiChunk(-w,false);await new Promise((ok,ko)=>{const t=setTimeout(ok,w*1000);signal&&signal.addEventListener('abort',()=>{clearTimeout(t);ko({name:'AbortError'})},{once:true})});aiChunk&&aiChunk(0,false)};
+  const more=async lite=>{if(listed)return;listed=true;try{const l=await listModels();const rest=l.filter(x=>!models.includes(x));if(lite)rest.sort((a,b)=>(/lite/.test(b)?1:0)-(/lite/.test(a)?1:0));models.push(...rest.slice(0,5))}catch(e){if(e.code==='key')throw e}};
   for(let i=0;i<models.length;i++){const m=models[i];const t0=Date.now();
     const stream=!!(window.ReadableStream&&TextDecoder);const cb=aiChunk;
     const res=await gfetch(`${GAPI}/models/${encodeURIComponent(m)}:${stream?'streamGenerateContent?alt=sse':'generateContent'}`,{method:'POST',signal,headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0,...thinkCfg(m),...(json?{responseMimeType:'application/json'}:{})}})});
     log('INFO','Gemini '+m,{status:res.status,stream});
-    if(res.ok){let t='';
+    let st=res.status;
+    if(res.ok){let t='';try{
       if(stream&&res.body){t=await readSSE(res,cb)}else{const d=await res.json();t=(d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('')}
       log('INFO','Gemini odpověď',{ms:Date.now()-t0,znaku:t.length});
-      if(!t)throw{code:'empty',msg:'model vrátil prázdnou odpověď'};if(settings.aiModel!==m&&!q429){settings.aiModel=m;saveSettings()}lastModel=m;if(q429)log('INFO','limit obejit jiným modelem',m);return t}
-    last=await gErr(res);log('CHYBA','Gemini '+m,last);
-    if(res.status===400&&/think/i.test(last.msg)&&!triedNoThink){triedNoThink=true;settings.noThink=true;saveSettings();i--;continue}
-    if(res.status===400&&/api.?key/i.test(last.msg))throw{code:'key',msg:last.msg};
-    if(res.status===401||res.status===403)throw{code:'key',msg:last.msg};
-    if(res.status===429){const q=last.quota||{};q429=last;
+      if(!t)throw{code:'empty',msg:'model vrátil prázdnou odpověď'};if(settings.aiModel!==m&&!q429){settings.aiModel=m;saveSettings()}lastModel=m;if(q429||busy)log('INFO','obejito jiným pokusem/modelem',m);return t
+      }catch(e){if(e&&(e.name==='AbortError'||e.code==='empty'))throw e;st=typeof e.code==='number'?e.code:503;last={code:st,msg:errTxt(e)};log('CHYBA','Gemini '+m+' (během odpovědi)',last)}}
+    else{last=await gErr(res);log('CHYBA','Gemini '+m,last)}
+    if(st>=500||/high demand|overloaded|UNAVAILABLE|try again later/i.test(last.msg||'')){busy={code:'busy',msg:last.msg};
+      /* přetížený model: 2× počkat a zkusit znovu, pak jiný model */
+      const n=waited[m]||0;if(n<2){waited[m]=n+1;const w=n?10:4;log('INFO','model přetížený – čekám',{s:w,model:m});await pause(w);i--;continue}
+      await more(false);continue}
+    if(st===400&&/think/i.test(last.msg)&&!triedNoThink){triedNoThink=true;settings.noThink=true;saveSettings();i--;continue}
+    if(st===400&&/api.?key/i.test(last.msg))throw{code:'key',msg:last.msg};
+    if(st===401||st===403)throw{code:'key',msg:last.msg};
+    if(st===429){const q=last.quota||{};q429=last;
       /* minutový limit: chvíli počkat a zkusit znovu stejný model */
-      if(!q.day&&!q.zero&&(waited[m]||0)<2&&(q.retry||0)<=45){waited[m]=(waited[m]||0)+1;const w=Math.max(5,Math.ceil(q.retry||15));log('INFO','minutový limit – čekám',{s:w,model:m});
-        aiChunk&&aiChunk(-w,false);await new Promise((ok,ko)=>{const t=setTimeout(ok,w*1000);signal&&signal.addEventListener('abort',()=>{clearTimeout(t);ko({name:'AbortError'})},{once:true})});aiChunk&&aiChunk(0,false);i--;continue}
+      if(!q.day&&!q.zero&&(waited[m]||0)<2&&(q.retry||0)<=45){waited[m]=(waited[m]||0)+1;const w=Math.max(5,Math.ceil(q.retry||15));log('INFO','minutový limit – čekám',{s:w,model:m});await pause(w);i--;continue}
       /* denní limit / bez limitu: zkusit jiné modely (lite mívají vyšší limit) */
-      if(!listed){listed=true;try{const l=await listModels();const rest=l.filter(x=>!models.includes(x));rest.sort((a,b)=>(/lite/.test(b)?1:0)-(/lite/.test(a)?1:0));models.splice(i+1,0,...rest.slice(0,5))}catch(e){if(e.code==='key')throw e}}
-      continue}
-    if(res.status===404&&!listed){listed=true;try{const l=await listModels();const rest=l.filter(x=>!models.includes(x));models.splice(i+1,0,...rest.slice(0,4))}catch(e){if(e.code==='key')throw e}}
-    if(res.status!==404&&res.status!==429&&res.status<500)throw last;
+      await more(true);continue}
+    if(st===404){await more(false);continue}
+    throw last;
   }
-  throw q429||last||{code:0};
+  throw q429||busy||last||{code:0};
 }
 function parseJSON(t){try{return JSON.parse(t)}catch(e){}const a=t.indexOf('{'),b=t.lastIndexOf('}');if(a>=0&&b>a)try{return JSON.parse(t.slice(a,b+1))}catch(e){}return null}
 const errTxt=e=>e==null?'':typeof e==='string'?e:(e.msg||e.message||(e.code!=null?'kód '+e.code:'')||(e.type?'událost '+e.type:'')||String(e));
@@ -538,7 +544,7 @@ const quotaTxt=e=>{const q=e.quota||{};
   if(q.zero)return 'Google tomuto klíči nedává žádný bezplatný limit (limit 0). Vytvoř nový klíč na aistudio.google.com → Get API key → Create API key → „Create API key in new project“ a vlož ho sem. Klíč by měl začínat „AIza“.';
   if(q.day)return 'Dnešní bezplatný limit Googlu je vyčerpaný (u všech modelů, které klíč smí). Obnoví se zítra v 9:00. Do té doby počítej čárky ručně, nebo použij jiný klíč (jiný Google účet).';
   return 'Google je teď přetížený nebo došel minutový limit. Zkus to za minutu.'+(e.msg?' ('+String(e.msg).slice(0,100)+')':'')};
-const aiErr=e=>e&&e.name==='AbortError'?'Zastaveno.':e&&e.code==='net'?e.msg+(/^AIza/.test(settings.aiKey||'')?'.':'. Klíč Gemini má začínat „AIza“ – vytvoř nový na aistudio.google.com/app/apikey.'):e&&e.code==='key'?'Klíč nefunguje'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'. Zkontroluj ho v Nastavení.':e&&e.code===429?quotaTxt(e):e&&e.code===404?'Žádný model není pro tento klíč dostupný'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'.':!navigator.onLine?'Jsi offline. Čtení přes AI potřebuje internet.':'Přečíst fotku se nepovedlo: '+(errTxt(e)||'neznámá chyba').slice(0,160)+'. Zkus to znovu.';
+const aiErr=e=>e&&e.name==='AbortError'?'Zastaveno.':e&&e.code==='net'?e.msg+(/^AIza/.test(settings.aiKey||'')?'.':'. Klíč Gemini má začínat „AIza“ – vytvoř nový na aistudio.google.com/app/apikey.'):e&&e.code==='key'?'Klíč nefunguje'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'. Zkontroluj ho v Nastavení.':e&&e.code===429?quotaTxt(e):e&&e.code==='busy'?'Google má teď AI přetíženou (hlavně večer). Appka to zkoušela opakovaně i s jiným modelem. Zkus to za pár minut znovu – fotka zůstává uložená.':e&&e.code===404?'Žádný model není pro tento klíč dostupný'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'.':!navigator.onLine?'Jsi offline. Čtení přes AI potřebuje internet.':'Přečíst fotku se nepovedlo: '+(errTxt(e)||'neznámá chyba').slice(0,160)+'. Zkus to znovu.';
 const LAYOUT_PROMPT=`Na fotkách je ručně psaná hospodská účtenka (útrata jednoho člověka). Na začátku řádku je cena v Kč (např. 55, 35, 40, 30, 28, 25, 20, 18, někdy 145 nebo 250), za ní čárky = počet kusů.
 Pravidla:
 - každá svislá čárka = 1 kus; 4 čárky přeškrtnuté pátou šikmou čárkou = 5 kusů
@@ -622,7 +628,7 @@ async function runAI(auto){
     $('apbar').style.width=pct.toFixed(1)+'%';$('appct').textContent=Math.round(pct)+' %';
     $('aptime').textContent=`${Math.round((Date.now()-t0)/1000)} s`;
     $('apsteps').innerHTML=STEPS.map((s,i)=>`<li class="${i<step?'done':i===step?'now':''}">${i<step?'✓':i===step?'<span class="spin"></span>':'○'} ${i===step&&step<3?esc(stage):s}</li>`).join('');
-    $('apnote').textContent=waitTo>Date.now()?`Google chce chvíli pauzu (limit za minutu) – zkusím znovu za ${Math.ceil((waitTo-Date.now())/1000)} s…`:step===1||step===2?(chars?`Přijímám odpověď… ${chars} znaků`:thinking?'AI přemýšlí…':'Čekám na AI…')+((Date.now()-stepT)>60000?' · Google teď odpovídá pomalu, vydrž nebo Zastavit a Zkusit znovu.':''):'';};
+    $('apnote').textContent=waitTo>Date.now()?`Google je vytížený – zkusím znovu za ${Math.ceil((waitTo-Date.now())/1000)} s…`:step===1||step===2?(chars?`Přijímám odpověď… ${chars} znaků`:thinking?'AI přemýšlí…':'Čekám na AI…')+((Date.now()-stepT)>60000?' · Google teď odpovídá pomalu, vydrž nebo Zastavit a Zkusit znovu.':''):'';};
   let waitTo=0;aiChunk=(n,th)=>{if(n<0){waitTo=Date.now()-n*1000;return}if(n===0)waitTo=0;chars=Math.max(0,n);thinking=th;};
   const tick=setInterval(draw,250);draw();
   try{
