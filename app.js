@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=28;
+const APP_VER=29;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -455,18 +455,43 @@ function stepFlag(d){
 }
 $('zx').onclick=()=>$('zoom').close();
 let zSplit=null;
-$('zsplitb').onclick=async()=>{const r=getR(curId),x=rowsOf(r)[zCur];const p=(r.photos||[])[x.ph||0];if(!x.box||!p){toast('Řádek není označený na fotce',true);return}
-  const b=$('zsplitb'),old=b.textContent;b.disabled=true;b.textContent='Čtu…';const box=$('zsplit');box.hidden=false;setTimeout(()=>box.scrollIntoView({behavior:'smooth',block:'center'}),50);box.innerHTML='<div class="note2"><span class="spin"></span> AI znovu čte tohle místo a hledá všechny ceny…</div>';
+function renderSplit(){const box=$('zsplit');const S=zSplit;if(!S)return;const r=getR(curId),x=rowsOf(r)[S.i];const t=S.rows.reduce((a,y)=>a+(+y.p||0)*(+y.c||0),0),n=S.rows.reduce((a,y)=>a+(+y.c||0),0);
+  box.innerHTML=`<b>${S.ai?`AI tu vidí ${S.rows.length} ${plur(S.rows.length,'částku','částky','částek')}`:'Rozdělení řádku'} – oprav, co nesedí:</b>
+  <div class="note2">Čárky bez ceny na dalším řádku patří k poslední ceně před nimi.</div>`+
+  S.rows.map((y,k)=>`<div class="spr${y.q?' q':''}"><span class="spn">${k+1}</span>
+    <button class="sppb" data-sp="${k}">${esc(y.p)} Kč ✎</button><span class="spx">×</span>
+    <button data-spc="${k}" data-d="-1" aria-label="ubrat">−</button><input inputmode="numeric" data-spi="${k}" value="${esc(y.c)}" aria-label="počet"><button data-spc="${k}" data-d="1" aria-label="přidat">+</button>
+    <button class="spdel" data-spdel="${k}" aria-label="odebrat">✕</button>
+    ${S.pick===k?`<div class="sppick">${priceList().map(v=>`<button data-spv="${v}"${v===+y.p?' class="on"':''}>${v}</button>`).join('')}<button data-spv="jina">Jiná…</button></div>`:''}</div>`).join('')+
+  `<button class="spadd" data-spadd="1">+ Přidat částku</button>
+  <div class="sptot">Celkem <b>${n} ks · ${kc(t)}</b> <span class="note2">(dosud ${x?x.c+' ks · '+kc(x.p*x.c):''})</span></div>
+  <div class="actions"><button class="pri" id="zspy">Uložit rozdělení</button><button id="zspn">Zrušit</button></div>`}
+$('zsplit').addEventListener('click',e=>{const b=e.target.closest('button');if(!b||!zSplit)return;const S=zSplit;
+  if(b.id==='zspn'){$('zsplit').hidden=true;zSplit=null;return}
+  if(b.id==='zspy'){const keep=S.rows.filter(y=>+y.p>0&&+y.c>0);if(!keep.length){toast('Zadej aspoň jednu částku s počtem',true);return}
+    const r=getR(curId);snap([r]);const rows=rowsOf(r);const orig=rows[S.i];
+    keep.forEach(y=>{y.q=0;y.pq=0;y.alts=null;if(!y.box&&orig){y.box=orig.box;y.ph=orig.ph}if(y.ph==null&&orig)y.ph=orig.ph});
+    rows.splice(S.i,1,...keep);r.rows=rows;save(r);$('zsplit').hidden=true;offerUndo(`Řádek rozdělen na ${keep.length} ${plur(keep.length,'položku','položky','položek')}`);
+    const f=flagList(r);zSplit=null;if(f.length)openZoom(f.find(i=>i>=S.i)??f[0]);else{$('zoom').close();openDone()}return}
+  if(b.dataset.sp!=null){S.pick=S.pick===+b.dataset.sp?null:+b.dataset.sp;renderSplit();return}
+  if(b.dataset.spv!=null){let v=b.dataset.spv;if(v==='jina'){v=prompt('Cena v Kč','');if(v==null)return}v=num(v);if(v>0){const y=S.rows[S.pick];if(y.ai&&y.pai&&y.pai!==v)offerLearn(getR(curId),y,y.pai,v);y.p=v;y.pq=0}S.pick=null;renderSplit();return}
+  if(b.dataset.spc!=null){const y=S.rows[+b.dataset.spc];y.c=Math.max(0,(+y.c||0)+(+b.dataset.d));renderSplit();return}
+  if(b.dataset.spdel!=null){S.rows.splice(+b.dataset.spdel,1);S.pick=null;renderSplit();return}
+  if(b.dataset.spadd){const last=S.rows[S.rows.length-1];S.rows.push({p:last?last.p:priceList()[0],c:0,ph:last?last.ph:0,box:null});S.pick=S.rows.length-1;renderSplit();return}
+});
+$('zsplit').addEventListener('change',e=>{const t=e.target;if(t.dataset.spi==null||!zSplit)return;zSplit.rows[+t.dataset.spi].c=num(t.value);renderSplit()});
+$('zsplitb').onclick=async()=>{const r=getR(curId),x=rowsOf(r)[zCur];const p=(r.photos||[])[x.ph||0];
+  const box=$('zsplit');box.hidden=false;setTimeout(()=>box.scrollIntoView({behavior:'smooth',block:'center'}),50);
+  zSplit={i:zCur,rows:[{...x,spots:[]}],ai:false,pick:null};
+  if(!(hasAI()&&navigator.onLine&&x.box&&p)){zSplit.rows.push({p:x.p,c:0,ph:x.ph,box:null});zSplit.pick=1;renderSplit();return}
+  const b=$('zsplitb'),old=b.textContent;b.disabled=true;b.textContent='Čtu…';
+  box.innerHTML='<div class="note2"><span class="spin"></span> AI znovu čte tohle místo a hledá všechny částky…</div><div class="actions"><button id="zspmanual">Rozdělit ručně</button></div>';
+  let manual=false;$('zspmanual').onclick=()=>{manual=true;zSplit.rows.push({p:x.p,c:0,ph:x.ph,box:null});zSplit.pick=1;renderSplit()};
   try{const rec=await getOne('photos',p.id);const fimg=await imgFromBlob((await shrink(rec.blob,2400,.9)).blob);
-    let sub=await regionRows(fimg,x.box,x.ph||0);if(!sub.length)throw{code:'empty',msg:'AI tu nenašla žádné položky'};sub=await countRows(sub,fimg);fixPrices(sub);
-    zSplit={i:zCur,rows:sub};const t=sub.reduce((a,y)=>a+y.p*y.c,0);
-    box.innerHTML=`<b>V tomto místě AI vidí ${sub.length} ${plur(sub.length,'položku','položky','položek')}:</b>`+sub.map(y=>`<div class="spl${y.q?' q':''}"><span class="hand">${y.p} Kč</span> × <b>${y.c}</b> = ${kc(y.p*y.c)}${y.q?' <span class="note2">⚠ zkontroluješ</span>':''}</div>`).join('')+
-      `<div class="note2">Celkem ${kc(t)} místo dosavadních ${kc(x.p*x.c)}.</div><div class="actions"><button class="pri" id="zspy">Nahradit tímto</button><button id="zspn">Nechat původní</button></div>`;
-    box.scrollIntoView({behavior:'smooth',block:'center'});
-    $('zspy').onclick=()=>{const r=getR(curId);snap([r]);const rows=rowsOf(r);rows.splice(zSplit.i,1,...zSplit.rows);r.rows=rows;save(r);box.hidden=true;offerUndo(`Rozděleno na ${zSplit.rows.length} položky`);
-      const f=flagList(r);const k=f.find(i=>i>=zSplit.i);openZoom(k!=null?k:zSplit.i);zSplit=null};
-    $('zspn').onclick=()=>{box.hidden=true;zSplit=null}}
-  catch(e){box.innerHTML=`<div class="status err">${esc(aiErr(e))}</div>`}finally{b.disabled=false;b.textContent=old}};
+    let sub=await regionRows(fimg,x.box,x.ph||0);if(!sub.length)throw{code:'empty',msg:'AI tu nenašla žádné částky'};sub=await countRows(sub,fimg);fixPrices(sub);
+    if(manual||!zSplit)return;zSplit={i:zCur,rows:sub,ai:true,pick:null};renderSplit();box.scrollIntoView({behavior:'smooth',block:'center'})}
+  catch(e){if(manual||!zSplit)return;zSplit.rows.push({p:x.p,c:0,ph:x.ph,box:null});renderSplit();box.insertAdjacentHTML('afterbegin',`<div class="status err">${esc(aiErr(e))} – rozděl ručně.</div>`)}
+  finally{b.disabled=false;b.textContent=old}};
 $('zdel').onclick=()=>{const r=getR(curId);if(!r)return;const x=rowsOf(r)[zCur];if(!x)return;snap([r]);r.rows=rowsOf(r).filter((_,k)=>k!==zCur);save(r);
   offerUndo(`Řádek ${x.p} Kč × ${x.c} smazán`);const n=rowsOf(r).length;if(!n){$('zoom').close();return}
   const f=flagList(r);if(f.length)openZoom(f.find(i=>i>=zCur)??f[0]);else openZoom(Math.min(zCur,n-1))};
@@ -707,7 +732,7 @@ async function readPhoto(pid,ph,status,signal){
 /* ---------- oblast s více řádky: přečíst znovu a rozdělit ---------- */
 const REGION_PROMPT=()=>`Obrázek je výřez z ručně psané hospodské účtenky. Může obsahovat JEDEN nebo VÍCE řádků. Položka = cena v Kč napsaná na začátku a za ní čárky (každá čárka 1 kus, 4 přeškrtnuté pátou = 5).
 - na jednom řádku mohou být dvě skupiny (vlevo a vpravo), každá se svou cenou = dvě položky
-- řádek čárek bez ceny těsně pod řádkem s cenou patří k té ceně (samostatná položka se stejnou cenou)
+- čárky, které pokračují na dalším řádku BEZ napsané ceny, patří k POSLEDNÍ ceně před nimi (čteno zleva doprava, shora dolů) – přičti je k té položce (jedna položka, box přes obě části)
 - čáry useknuté horním nebo dolním okrajem výřezu patří sousedním řádkům – ignoruj je
 - stůl, pozadí a tištěný text ignoruj
 CENÍK této hospody: ${priceList().join(', ')} Kč (cena mimo ceník je podezřelá → price_uncertain true a price_alts).
