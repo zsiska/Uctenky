@@ -240,6 +240,31 @@ svg .mkt{font:700 .014px sans-serif;fill:#fff;stroke:none;text-anchor:middle;dom
 .hw img{width:100%;border-radius:8px;background:#fff}
 .hw input{width:4.5em}
 #updbar{position:fixed;left:12px;right:12px;top:calc(8px + env(safe-area-inset-top));z-index:70;background:#151826;color:#fff;border-radius:16px;padding:10px 10px 10px 16px;display:flex;align-items:center;gap:10px;font-size:16px;box-shadow:0 8px 24px rgba(0,0,0,.35);max-width:740px;margin:0 auto}#updbar span{flex:1}
+
+.see{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin-bottom:8px;display:grid;gap:6px}
+.see:empty{display:none}
+.seel{display:flex;align-items:center;gap:6px;font-size:17px;width:100%;text-align:left;background:none;border:2px solid transparent;border-radius:12px;padding:4px 6px;min-height:0;color:inherit}
+button.seel{border-color:var(--line)}
+button.seel.on{border-color:var(--penbg);background:light-dark(#e8edff,#1d2547)}
+.seel>b:first-child{flex:none;width:4.6em;font-size:13px;color:var(--mute)}
+.scs{display:flex;flex-wrap:wrap;gap:2px;align-items:center;flex:1}
+.seel .ss{flex:none;font-size:20px;font-weight:800;margin-left:auto}
+.seel i{font-style:normal;color:var(--mute);padding:0 1px}
+.sc{display:inline-grid;place-items:center;min-width:28px;height:30px;border-radius:8px;font-weight:800;color:#fff;padding:0 6px}
+.sc.a{background:#1d7a46}.sc.b{background:#d27a00}
+.sc.dif{outline:3px solid var(--red);outline-offset:1px}
+.sc.a.dif{background:#e0182d}
+.ss{font-size:22px}
+.seeq{display:flex;gap:8px;align-items:center;font-size:16px}
+.qn{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--red);color:#fff;font-weight:800;flex:none}
+svg .gA line{stroke:#1d7a46;stroke-width:.003;stroke-dasharray:.008 .006;opacity:.9}
+svg .gA rect{fill:#1d7a46;stroke:#fff;stroke-width:.002}
+svg .gA.dif rect{fill:#e0182d;stroke:#fff;stroke-width:.003}
+svg .gA.dif line{stroke:#e0182d}
+svg .gB rect{fill:#d27a00;stroke:#e0182d;stroke-width:.004}
+svg .gA text,svg .gB text,svg .gQ text{stroke:none;fill:#fff;font-family:sans-serif;font-weight:800;text-anchor:middle;dominant-baseline:central}
+svg .gQ circle{fill:none;stroke:#e0182d;stroke-width:.004;stroke-dasharray:.01 .006}
+svg .gQ circle.gQn{fill:#e0182d;stroke:#fff;stroke-width:.002;stroke-dasharray:none}
 </style>
 </head>
 <body class="obs">
@@ -260,13 +285,14 @@ svg .mkt{font:700 .014px sans-serif;fill:#fff;stroke:none;text-anchor:middle;dom
   </div>
   <div class="zbody">
     <div class="why" id="zw"></div>
-    <div class="zalts" id="zalts"></div>
     <div class="zpr" id="zpr"></div>
     <div class="zviews">
       <button data-z="row" id="zrow">Řádek</button><button data-z="tap" id="ztap">👆 Ťukat čárky</button><button data-z="all">Celá fotka</button><button data-z="mark" id="zmarkb">✎ Označit řádek</button>
     </div>
     <div class="zbox" id="zimg"></div>
     <div class="zzoom"><button data-zoom="-" aria-label="Oddálit">−</button><span id="zlvl">1×</span><button data-zoom="+" aria-label="Přiblížit">+</button><span class="note2" id="zhint"></span><button id="zdel" class="mini danger" style="margin-left:auto">Smazat řádek</button><button id="zre" class="mini" >AI přepočítat</button></div>
+    <div class="see" id="zsee"></div>
+    <div class="zalts" id="zalts"></div>
     <div class="ztapbar" id="ztapbar" hidden>
       <div><b id="ztapn">0</b> <span class="note2">ťuknuto</span></div>
       <button id="ztap5" aria-pressed="false">ǂ další ťuk = 5</button>

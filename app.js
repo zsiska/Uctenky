@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=26;
+const APP_VER=27;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -137,6 +137,21 @@ function cardHTML(r){
       ${(st=>st==='paid'?`<span class="tag t-paid">${r.writtenOff&&paidR(r)<s[1]?'Odepsáno':'Zaplaceno'}</span>`:st==='partial'?`<span class="tag t-q">Částečně · zbývá ${kc(dueR(r))}</span>`:'<span class="tag t-open">Nezaplaceno</span>')(stateR(r))}${f?`<span class="tag t-q">${f} ke kontrole</span>`:''}${r.sentAt?`<span class="tag t-sent">Odesláno</span>`:''}${pays(r).some(p=>p.eet&&!/ok/.test(p.eet.state))?`<span class="tag t-q">EET čeká</span>`:''}</span>
     <span class="amt">${kc(s[1])}</span></button>`;
 }
+/* porovnání skupin z 1. a 2. počítání – které se liší */
+function seeDiff(x){const A=x.ga||[],B=x.gb||[];const a=new Set(),b=new Set();if(!B.length)return{a,b};const used=new Set();
+  A.forEach((g,k)=>{let best=-1,bd=1;B.forEach((h,m)=>{if(used.has(m))return;const d=Math.abs(h[0]-g[0]);if(d<bd){bd=d;best=m}});
+    if(best<0||bd>.06){a.add(k)}else{used.add(best);if(B[best][1]!==g[1]){a.add(k);b.add(best)}}});
+  B.forEach((h,m)=>{if(!used.has(m))b.add(m)});return{a,b}}
+function seeHTML(x){const A=x.ga||[],B=x.gb||[];if(!A.length&&!(x.bad||[]).length)return'';const d=seeDiff(x);
+  const chips=(G,set,cls)=>G.map((g,k)=>`<span class="sc ${cls}${set.has(k)?' dif':''}">${g[1]}</span>`).join('<i>+</i>');
+  const sum=G=>G.reduce((s,g)=>s+g[1],0);
+  let h='';
+  const two=B.length&&(d.a.size||d.b.size||sum(A)!==sum(B));
+  const line=(lbl,G,set,cls)=>{const s=sum(G);const on=s===+x.c;return two?`<button class="seel${on?' on':''}" data-alt="${s}"><b>${lbl}</b><span class="scs">${chips(G,set,cls)}</span><span class="ss">= ${s}${on?' ✓':''}</span></button>`:`<div class="seel"><b>${lbl}</b><span class="scs">${chips(G,set,cls)}</span><span class="ss">= ${s}</span></div>`};
+  if(A.length)h+=line('AI vidí',A,d.a,'a');
+  if(two)h+=line('Kontrola',B,d.b,'b')+`<div class="note2">Počítání se liší v <b style="color:var(--red)">červeně orámované</b> skupině – na fotce je označená. Klepni na řádek, který sedí, nebo uprav počet dole.</div>`;
+  (x.bad||[]).forEach((z,k)=>h+=`<div class="seeq"><span class="qn">${k+1}</span>${esc(z[1]||'nejasné místo')}</div>`);
+  return h}
 function svgPhoto(r,pi,vb,mode,selIdx,extra){
   const p=(r.photos||[])[pi];if(!p)return'';
   const H=(p.h&&p.w)?p.h/p.w:1.4;
@@ -145,6 +160,11 @@ function svgPhoto(r,pi,vb,mode,selIdx,extra){
   rowsOf(r).forEach((x,i)=>{if(!x.box||(x.ph||0)!==pi)return;
     if(mode==='all'||(mode==='one'&&i===selIdx)){inner+=rect(x.box,'b'+(x.q?' q':'')+(i===selIdx?' sel':''),mode==='all'?i:null);if(mode==='all')inner+=`<text x="${x.box[0]+.006}" y="${x.box[1]*H+.032}">${esc(x.p)}</text>`}
     if(i===selIdx)(x.spots||[]).forEach(s=>inner+=rect(s,'s'));
+    if(i===selIdx&&mode==='one'&&x.box&&(x.ga||x.bad)){const bh=(x.box[3]-x.box[1])*H,ty=x.box[1]*H,by=x.box[3]*H,fs=Math.max(.016,Math.min(.034,bh*.3));
+      const diff=seeDiff(x);
+      (x.ga||[]).forEach((g,k)=>{inner+=`<g class="gA${diff.a.has(k)?' dif':''}"><line x1="${g[0]}" y1="${ty}" x2="${g[0]}" y2="${by}"/><rect x="${g[0]-fs*.62}" y="${ty-fs*1.25}" width="${fs*1.24}" height="${fs*1.15}" rx="${fs*.25}"/><text x="${g[0]}" y="${ty-fs*.67}" style="font-size:${fs*.85}px">${g[1]}</text></g>`});
+      (x.gb||[]).forEach((g,k)=>{if(!diff.b.has(k))return;inner+=`<g class="gB"><rect x="${g[0]-fs*.62}" y="${by+fs*.1}" width="${fs*1.24}" height="${fs*1.15}" rx="${fs*.25}"/><text x="${g[0]}" y="${by+fs*.68}" style="font-size:${fs*.85}px">${g[1]}</text></g>`});
+      (x.bad||[]).forEach((z,k)=>{const cy=(ty+by)/2,R=Math.max(bh*.62,.025);inner+=`<g class="gQ"><circle cx="${z[0]}" cy="${cy}" r="${R}"/><circle class="gQn" cx="${z[0]+R*.8}" cy="${cy-R*.8}" r="${fs*.55}"/><text x="${z[0]+R*.8}" y="${cy-R*.8}" style="font-size:${fs*.7}px">${k+1}</text></g>`})}
   });
   if(extra)inner+=rect(extra,'nw');
   const v=vb||[0,0,1,H];
@@ -407,18 +427,21 @@ function renderZoom(){
   $('zt').innerHTML=`<button id="zpe" class="zpbtn${x.pq?' bad':''}">${esc(x.p)} Kč ✎</button>`+(r.name?` <span class="note2" style="color:inherit">· ${esc(r.name)}</span>`:'');
   const showP=zPrice||x.pq;const cands=[...new Set([...(x.palts||[]),...priceList()])].filter(v=>v!==+x.p);
   $('zpr').innerHTML=showP?`<div class="note2" style="width:100%">${x.pq?'<b>Sporná cena.</b> ':''}Jaká je správná cena tohoto řádku?</div>`+[+x.p,...cands].slice(0,10).map(v=>`<button data-zp="${v}"${v===+x.p?' class="on"':''}>${v}${v===+x.p?' ✓':''}</button>`).join('')+'<button data-zp="jina">Jiná…</button>':'';
-  $('zw').textContent=x.q?(x.note||'Zkontroluj počet čárek.'):'';
-  $('zalts').innerHTML=x.q&&x.alts&&x.alts.length>1?x.alts.map(v=>`<button data-alt="${v}"${v===+x.c?' style="background:var(--penbg);color:#fff"':''}>${v} ks</button>`).join(''):'';
+  const see=zMode==='row'?seeHTML(x):'';$('zsee').innerHTML=see;const seeTwo=see.includes('data-alt');
+  $('zw').textContent=x.q&&!seeTwo&&!x.pq?(x.note||'Zkontroluj počet čárek.'):x.pq?'':'';
+  $('zalts').innerHTML=!seeTwo&&x.q&&x.alts&&x.alts.length>1?x.alts.map(v=>`<button data-alt="${v}"${v===+x.c?' style="background:var(--penbg);color:#fff"':''}>${v} ks</button>`).join(''):'';
   if(zMode==='spot')zMode='row';if(zMode==='row'&&!x.box)zMode=hasPh?'mark':'row';if(zMode==='tap'&&!x.box)zMode='mark';
   document.querySelectorAll('#zoom [data-z]').forEach(b=>{b.setAttribute('aria-pressed',b.dataset.z===zMode);b.disabled=!hasPh||(!x.box&&(b.dataset.z==='row'||b.dataset.z==='tap'))});
   $('zmarkb').textContent=x.box?'✎ Přeznačit řádek':'✎ Označit řádek';
-  let vb=null;if((zMode==='row'||zMode==='tap')&&x.box)vb=padBox(x.box,.02,H);
+  let vb=null;if((zMode==='row'||zMode==='tap')&&x.box)vb=padBox(x.box,zMode==='row'&&(x.ga||x.bad)?.06:.02,H);
   $('zhint').textContent=zMode==='mark'?'Táhni prstem přes celý řádek.':zMode==='tap'?'Ťukni na každou čárku.':'';
   $('zlvl').textContent=zLevel+'×';
   const zb=$('zimg');zb.style.setProperty('--z',zMode==='mark'?1:zLevel);
   let svg=hasPh?svgPhoto(r,x.ph||0,vb,zMode==='mark'?'mark':zMode==='all'?'all':zMode==='tap'?'none':'one',zMode==='tap'?-1:zCur):'<p class="note2" style="color:#fff;padding:14px">K účtence není fotka – počítej tlačítky dole.</p>';
   if(zMode==='tap'&&hasPh){svg=svg.replace('class="phs','class="phs tap').replace('</svg>',tapMarks.map((m,i)=>{const R=(vb?vb[2]:1)*.035/Math.max(1,zLevel*.7);return `<circle class="mk${m[2]===5?' mk5':''}" cx="${m[0]}" cy="${m[1]}" r="${R}" style="stroke-width:${R*.18}"/><text class="mkt" x="${m[0]}" y="${m[1]}" style="font-size:${R*1.1}px">${m[2]===5?'5':tapMarks.slice(0,i+1).reduce((a,q)=>a+q[2],0)}</text>`}).join('')+'</svg>')}
   zb.innerHTML=svg;
+  if(zMode==='row'&&vb&&zLevel>1){const d=seeDiff(x);const tx=[...[...d.a].map(k=>x.ga[k][0]),...(x.bad||[]).map(z=>z[0])].sort((a,b)=>a-b)[0];
+    requestAnimationFrame(()=>{zb.scrollLeft=tx!=null?Math.max(0,(tx-vb[0])/vb[2]*zb.scrollWidth-zb.clientWidth/2):0})}
   $('ztapbar').hidden=zMode!=='tap';$('ztapn').textContent=tapMarks.reduce((a,m)=>a+m[2],0);$('ztap5').setAttribute('aria-pressed',tap5);
   $('zc').value=x.c;$('zsub').textContent=kc((+x.p||0)*(+x.c||0));
   $('zok').textContent=x.q?(fl.length>1?'Sedí ✓ Další ›':'Sedí ✓ Hotovo'):(fl.length?'Další sporné ›':'Hotovo ✓');
@@ -587,7 +610,9 @@ box a spot jsou souřadnice v CELÉ fotce jako zlomky 0–1 (x zleva, y shora). 
 const COUNT_PROMPT=n=>`Dostaneš ${n} výřezů z ručně psané hospodské účtenky. Každý výřez je jeden řádek (nebo blok řádků) čárek pro jednu cenu. Výřez může na okrajích obsahovat kousky sousedních řádků – ty nepočítej.
 Úkol: u každého výřezu spočítej čárky patřící k vyznačené ceně. Každá svislá čárka = 1. Čtyři čárky přeškrtnuté šikmou pátou = 5 (přeškrtnutí se nepočítá navíc). Číslice ceny nejsou čárky. Čárka přeškrtnutá malým křížkem je zrušená.
 Postupuj zleva doprava a počítej po skupinách, pečlivě, čárku po čárce. Když je výřez nejasný (překryvy, šmouhy, tvary N/X), nastav uncertain=true a do note napiš krátce česky proč.
-Odpověz POUZE JSONem: {"counts":[{"id":1,"count":12,"uncertain":false,"note":""}]} – id je číslo výřezu.`;
+Ke každému výřezu vrať i SKUPINY, jak jsi je počítal zleva doprava: "groups":[{"x":0.21,"n":5},…] – x je vodorovný střed skupiny jako zlomek šířky výřezu (0 = levý okraj, 1 = pravý), n = počet čárek ve skupině (plný plotek = 5). Součet n musí být count.
+Nejasná místa dej do "bad":[{"x":0.62,"why":"krátce česky, např. dvě čárky splývají"}].
+Odpověz POUZE JSONem: {"counts":[{"id":1,"count":13,"groups":[{"x":0.2,"n":5},{"x":0.4,"n":5},{"x":0.58,"n":3}],"bad":[],"uncertain":false,"note":""}]} – id je číslo výřezu.`;
 const clamp01=n=>Math.min(1,Math.max(0,+n||0));
 async function imgFromBlob(b){const u=URL.createObjectURL(b);try{return await loadImg(u)}finally{URL.revokeObjectURL(u)}}
 async function cropRow(fimg,box){const W=fimg.naturalWidth,Hh=fimg.naturalHeight,m=.015;const x1=clamp01(box[0]-m),y1=clamp01(box[1]-m),x2=clamp01(box[2]+m),y2=clamp01(box[3]+m);
@@ -598,10 +623,14 @@ async function countPass(rows,crops,order,signal){
   const ps=[{text:COUNT_PROMPT(order.length)}];
   for(let k=0;k<order.length;k++){const i=order[k];ps.push({text:`Výřez ${k+1}: cena ${rows[i].p} Kč${rows[i].note?' ('+rows[i].note+')':''}`});ps.push({inline_data:{mime_type:'image/jpeg',data:await b64(crops[i])}})}
   const d=parseJSON(await aiCall(ps,signal,true));const out={};
-  (d&&Array.isArray(d.counts)?d.counts:[]).forEach(c=>{const k=num(c.id)-1;if(order[k]!=null)out[order[k]]={c:num(c.count),q:!!c.uncertain,n:String(c.note||'')}});
+  (d&&Array.isArray(d.counts)?d.counts:[]).forEach(c=>{const k=num(c.id)-1;const i=order[k];if(i==null)return;const bx=rows[i].box;
+    const mx=v=>{if(!bx)return null;const x1=clamp01(bx[0]-.015),x2=clamp01(bx[2]+.015);return +(x1+(x2-x1)*clamp01(v)).toFixed(4)};
+    const g=(Array.isArray(c.groups)?c.groups:[]).map(z=>[mx(z.x),num(z.n)]).filter(z=>z[0]!=null&&z[1]>0).sort((a,b)=>a[0]-b[0]);
+    const bad=(Array.isArray(c.bad)?c.bad:[]).map(z=>[mx(z.x),String(z.why||'').slice(0,80)]).filter(z=>z[0]!=null);
+    out[i]={c:num(c.count),q:!!c.uncertain||bad.length>0,n:String(c.note||''),g,bad}});
   return out;
 }
-function merge(rows,A,B){rows.forEach((x,i)=>{const a=A[i],b=B[i];const c0=x.c;
+function merge(rows,A,B){rows.forEach((x,i)=>{const a=A[i],b=B[i];const c0=x.c;x.ga=a&&a.g&&a.g.length?a.g:null;x.gb=b&&b.g&&b.g.length?b.g:null;x.bad=[...((a&&a.bad)||[]),...((b&&b.bad)||[])].filter((z,k,arr)=>arr.findIndex(w=>Math.abs(w[0]-z[0])<.02)===k).slice(0,4);if(!x.ga&&x.gb){x.ga=x.gb;x.gb=null}
   if(a&&b){if(a.c===b.c){x.c=a.c;if(a.q||b.q){x.q=1;x.note=(a.n||b.n||x.note)}else if(x.q&&a.c===c0)x.q=1;else x.q=0;if(c0!==a.c&&x.q){x.alts=[...new Set([c0,a.c])].sort((m,n)=>m-n);x.note=(x.note?x.note+' · ':'')+`1. odhad ${c0}, přepočet ${a.c}`}}
     else{x.c=Math.max(a.c,b.c);x.q=1;x.alts=[...new Set([a.c,b.c,c0])].sort((m,n)=>m-n);x.note=`AI napočítala jednou ${a.c}, podruhé ${b.c}. Vyber nebo přepočítej.`+(a.n?' '+a.n:'')}}
   else if(a||b){const v=a||b;x.c=v.c;x.q=1;x.note='Přepočet jen jednou: '+v.c+(v.n?' – '+v.n:'')}
@@ -669,7 +698,7 @@ async function recountRow(r,i,status){
   const rec=await getOne('photos',p.id);const crop=await cropRow(await imgFromBlob(rec.blob),x.box);
   const tmp=[{...x}];status('AI přepočítává řádek…');
   const [A,B]=await Promise.all([countPass(tmp,[crop],[0]),countPass(tmp,[crop],[0])]);
-  const a=A[0],b=B[0];if(!a&&!b)throw{code:'empty',msg:'AI nevrátila počet'};
+  const a=A[0],b=B[0];if(!a&&!b)throw{code:'empty',msg:'AI nevrátila počet'};x.ga=(a&&a.g&&a.g.length?a.g:(b&&b.g))||null;x.gb=a&&b&&b.g&&b.g.length?b.g:null;x.bad=[...((a&&a.bad)||[]),...((b&&b.bad)||[])].slice(0,4);
   return a&&b&&a.c===b.c?{c:a.c,sure:!(a.q||b.q),txt:`AI 2× napočítala ${a.c}`}:{c:(a||b).c,sure:false,txt:`AI napočítala ${a?a.c:'?'} a ${b?b.c:'?'} – přepočítej ručně`};
 }
 /* dialog s průběhem; auto = rovnou použít a projít sporná místa */
