@@ -55,7 +55,8 @@ const pu=p=>p?photoURLs.get(p.id)||'':'';
 
 const saveT=new Map();
 function save(r){if(r&&r.rows)syncR(r);r.updatedAt=Date.now();if(memMode)return;clearTimeout(saveT.get(r.id));saveT.set(r.id,setTimeout(()=>tx('receipts','readwrite',s=>s.put(JSON.parse(JSON.stringify(r)))).catch(e=>goMem(e)),250))}
-function saveSettings(){if(memMode)return Promise.resolve();return tx('kv','readwrite',s=>s.put(settings,'settings')).catch(e=>goMem(e))}
+function keyBackup(){try{if(settings.aiKey){localStorage.setItem('uctenky-key',JSON.stringify({k:settings.aiKey,m:settings.aiModel||''}))}else localStorage.removeItem('uctenky-key')}catch(e){log('VAROV','záloha klíče selhala',errInfo(e))}}
+function saveSettings(){keyBackup();if(memMode)return Promise.resolve();return tx('kv','readwrite',s=>s.put(settings,'settings')).catch(e=>goMem(e))}
 
 /* ---------- derived ---------- */
 const rowsOf=r=>r.rows||[];
@@ -307,6 +308,7 @@ function renderSettings(){
     <p class="note2"><b>Google Gemini (zdarma)</b> – pro verzi mimo Claude (GitHub, kolega).</p>
     <p class="note2">Bezplatný klíč získáš na <b>aistudio.google.com</b> → Get API key → Create API key (stačí Google účet). Klíč se uloží jen v tomto telefonu.</p>
     <label class="f" for="sk">API klíč</label><input id="sk" type="password" autocomplete="off" value="${esc(settings.aiKey||'')}" placeholder="AIza…">
+    <p class="note2" style="margin:6px 0 0">${settings.aiKey?(memMode?'<b style="color:var(--red)">⚠ Klíč platí jen do zavření – telefon nedovolil ukládat. Nejsi v anonymním okně Safari?</b>':'<b style="color:var(--ok)">✓ Klíč je uložený v telefonu</b>'):'Klíč se uloží hned po vložení.'} Na iPhonu má aplikace z ikony na ploše <b>vlastní</b> úložiště, oddělené od Safari – klíč vlož v appce spuštěné z ikony.</p>
     <label class="f" for="sm">Model (nech prázdné = automaticky)</label><input id="sm" value="${esc(settings.aiModel||'')}" placeholder="${DEF_MODELS[0]}">
     <div class="actions" style="margin-top:10px"><button class="pri" data-a="savekey">Uložit klíč</button><button data-a="testkey">Vyzkoušet</button>${settings.aiKey?'<button data-a="sharekey">Odkaz pro kolegu (s klíčem)</button><button class="danger" data-a="delkey">Smazat klíč</button>':''}</div>
     <p class="status" id="kst"></p>
@@ -992,6 +994,7 @@ app.addEventListener('click',e=>{
   if(a==='savekey'){settings.aiKey=$('sk').value.trim();settings.aiModel=$('sm').value.trim();saveSettings().then(()=>{toast(settings.aiKey?'Klíč uložen':'Klíč smazán');render()});return}
   if(a==='delkey'){settings.aiKey='';saveSettings().then(()=>render());return}
   if(a==='testkey'){const k=$('kst');settings.aiKey=$('sk').value.trim();settings.aiModel=$('sm').value.trim();if(!settings.aiKey){k.className='status err';k.textContent='Nejdřív vlož klíč.';return}
+    saveSettings();
     k.className='status';k.textContent='Zjišťuji dostupné modely…';const userModel=settings.aiModel;listModels().then(l=>{if(!userModel&&l.length)settings.aiModel=l[0];k.textContent='Zkouším model '+(settings.aiModel||DEF_MODELS[0])+'…';return gemini([{text:'Odpověz jen slovem OK.'}],undefined,false)}).then(t=>{saveSettings();k.className='status ok';k.textContent='Klíč funguje ✓ (model: '+(settings.aiModel||DEF_MODELS[0])+')'},e=>{k.className='status err';k.textContent=aiErr(e).replace('Přečíst fotku se nepovedlo','Test klíče selhal')});return}
   if(a==='sharekey'){const link=location.origin+location.pathname+'#k='+encodeURIComponent(settings.aiKey)+(settings.aiModel?'&m='+encodeURIComponent(settings.aiModel):'');
     const txt='Appka na účtenky: otevři odkaz v Safari, pak Sdílet → Přidat na plochu. AI čtení čárek je v odkazu už nastavené.\n'+link;
@@ -1006,6 +1009,7 @@ app.addEventListener('click',e=>{
   if(a==='del')r.rows=rowsOf(r).filter((_,k)=>k!==i);
   save(r);render();if(a==='del')offerUndo(`Řádek ${x.p} Kč × ${x.c} smazán`);else if(a==='-')offerUndo(`${x.p} Kč: ubráno na ${x.c}`);else if(a==='ok')offerUndo('Řádek potvrzen');
 });
+document.addEventListener('change',e=>{if(e.target.id==='sk'||e.target.id==='sm'){settings.aiKey=$('sk').value.trim();if($('sm'))settings.aiModel=$('sm').value.trim();saveSettings().then(()=>toast(settings.aiKey?'Klíč uložen':'Klíč smazán'))}});
 addEventListener('online',()=>render());addEventListener('offline',()=>render());
 
 /* ---------- boot ---------- */
@@ -1014,7 +1018,12 @@ addEventListener('online',()=>render());addEventListener('offline',()=>render())
   catch(e){log('CHYBA','IndexedDB nedostupná',errInfo(e));idb=null;memMode=true;receipts=[]}
   const h=new URLSearchParams(location.hash.slice(1));
   if(h.get('k')){settings.aiKey=h.get('k');if(h.get('m'))settings.aiModel=h.get('m');await saveSettings();setTimeout(()=>toast('Čtení čárek přes AI je nastavené ✓'),300)}
-  if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
+  let keySrc=settings.aiKey?'úložiště':'žádný';
+  if(!settings.aiKey){try{const b=JSON.parse(localStorage.getItem('uctenky-key')||'null');if(b&&b.k){settings.aiKey=b.k;if(!settings.aiModel)settings.aiModel=b.m||'';keySrc='záloha';saveSettings()}}catch(e){}}
+  else keyBackup();
+  const sa=!!(navigator.standalone||matchMedia('(display-mode: standalone)').matches);
+  log('INFO','start',{klic:keySrc,ikona:sa,uloziste:memMode?'paměť':'IndexedDB',ucetenek:receipts.length});
+  if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().then(p=>log('INFO','trvalé úložiště',p)).catch(()=>{});
   render();
   document.body.classList.toggle('obs',settings.big!==false);
   if(!settings.eetPokl){settings.eetPokl='tel-'+Math.random().toString(36).slice(2,8);saveSettings()}
