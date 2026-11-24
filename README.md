@@ -2,7 +2,7 @@
 
 Webová aplikace (PWA) pro hospodské účtenky s čárkami. Běží v telefonu i bez internetu.
 
-**Aplikace:** https://zsiska.github.io/uctenky/
+**Aplikace:** https://zsiska.github.io/Uctenky/
 Na iPhonu otevři v Safari → Sdílet → **Přidat na plochu**.
 
 ## Co umí
