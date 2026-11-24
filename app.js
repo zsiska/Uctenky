@@ -477,7 +477,11 @@ async function gfetch(url,opt={}){
     catch(e2){if(e2&&e2.name==='AbortError')throw e2;log('CHYBA','Google fetch (key v adrese) selhal',errInfo(e2));
       throw{code:'net',msg:navigator.onLine?'Google spojení odmítl. Nejčastěji je to neplatným nebo nepovoleným klíčem':'Jsi offline'}}}
 }
-async function gErr(res){let msg='';try{const d=await res.json();msg=(d.error&&(d.error.status?d.error.status+': ':'')+(d.error.message||''))||''}catch(e){}return{code:res.status,msg}}
+async function gErr(res){let msg='',quota=null;try{const d=await res.json();msg=(d.error&&(d.error.status?d.error.status+': ':'')+(d.error.message||''))||'';
+  if(res.status===429){quota={day:false,min:false,zero:/limit: ?0\b/.test(msg),retry:0};for(const x of (d.error&&d.error.details)||[]){
+    if(/RetryInfo/.test(x['@type']||'')&&x.retryDelay)quota.retry=parseFloat(x.retryDelay)||0;
+    for(const v of x.violations||[]){const id=String(v.quotaId||v.quotaMetric||'');if(/PerDay/i.test(id))quota.day=true;if(/PerMinute/i.test(id))quota.min=true;if(String(v.quotaValue)==='0')quota.zero=true}}
+    const rm=msg.match(/retry in ([\d.]+)s/i);if(rm&&!quota.retry)quota.retry=parseFloat(rm[1])}}catch(e){}return{code:res.status,msg,quota}}
 /* zjistí modely, které klíč smí použít, a seřadí je od nejlepšího */
 async function listModels(){
   const res=await gfetch(GAPI+'/models?pageSize=200');
@@ -491,7 +495,7 @@ async function listModels(){
   log('INFO','Gemini modely',list.slice(0,8));
   return list;
 }
-let aiChunk=null; /* callback(znaků) pro průběh */
+let aiChunk=null,lastModel=''; /* callback(znaků) pro průběh */
 function thinkCfg(m){if(settings.noThink)return{};if(/gemini-[3-9]/.test(m))return{thinkingConfig:{thinkingLevel:'low'}};if(/gemini-2\.5-flash/.test(m))return{thinkingConfig:{thinkingBudget:0}};return{}}
 async function readSSE(res,onChunk){
   const rd=res.body.getReader();const dec=new TextDecoder();let buf='',txt='';
@@ -502,7 +506,7 @@ async function readSSE(res,onChunk){
   return txt;
 }
 async function gemini(parts,signal,json){
-  let models=settings.aiModel?[settings.aiModel]:[...DEF_MODELS];let last;let listed=false;let triedNoThink=false;
+  let models=settings.aiModel?[settings.aiModel]:[...DEF_MODELS];let last;let listed=false;let triedNoThink=false;const waited={};let q429=null;
   for(let i=0;i<models.length;i++){const m=models[i];const t0=Date.now();
     const stream=!!(window.ReadableStream&&TextDecoder);const cb=aiChunk;
     const res=await gfetch(`${GAPI}/models/${encodeURIComponent(m)}:${stream?'streamGenerateContent?alt=sse':'generateContent'}`,{method:'POST',signal,headers:{'Content-Type':'application/json'},
@@ -511,19 +515,30 @@ async function gemini(parts,signal,json){
     if(res.ok){let t='';
       if(stream&&res.body){t=await readSSE(res,cb)}else{const d=await res.json();t=(d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('')}
       log('INFO','Gemini odpověď',{ms:Date.now()-t0,znaku:t.length});
-      if(!t)throw{code:'empty',msg:'model vrátil prázdnou odpověď'};if(settings.aiModel!==m){settings.aiModel=m;saveSettings()}return t}
+      if(!t)throw{code:'empty',msg:'model vrátil prázdnou odpověď'};if(settings.aiModel!==m&&!q429){settings.aiModel=m;saveSettings()}lastModel=m;if(q429)log('INFO','limit obejit jiným modelem',m);return t}
     last=await gErr(res);log('CHYBA','Gemini '+m,last);
     if(res.status===400&&/think/i.test(last.msg)&&!triedNoThink){triedNoThink=true;settings.noThink=true;saveSettings();i--;continue}
     if(res.status===400&&/api.?key/i.test(last.msg))throw{code:'key',msg:last.msg};
     if(res.status===401||res.status===403)throw{code:'key',msg:last.msg};
+    if(res.status===429){const q=last.quota||{};q429=last;
+      /* minutový limit: chvíli počkat a zkusit znovu stejný model */
+      if(!q.day&&!q.zero&&(waited[m]||0)<2&&(q.retry||0)<=45){waited[m]=(waited[m]||0)+1;const w=Math.max(5,Math.ceil(q.retry||15));log('INFO','minutový limit – čekám',{s:w,model:m});
+        aiChunk&&aiChunk(-w,false);await new Promise((ok,ko)=>{const t=setTimeout(ok,w*1000);signal&&signal.addEventListener('abort',()=>{clearTimeout(t);ko({name:'AbortError'})},{once:true})});aiChunk&&aiChunk(0,false);i--;continue}
+      /* denní limit / bez limitu: zkusit jiné modely (lite mívají vyšší limit) */
+      if(!listed){listed=true;try{const l=await listModels();const rest=l.filter(x=>!models.includes(x));rest.sort((a,b)=>(/lite/.test(b)?1:0)-(/lite/.test(a)?1:0));models.splice(i+1,0,...rest.slice(0,5))}catch(e){if(e.code==='key')throw e}}
+      continue}
     if(res.status===404&&!listed){listed=true;try{const l=await listModels();const rest=l.filter(x=>!models.includes(x));models.splice(i+1,0,...rest.slice(0,4))}catch(e){if(e.code==='key')throw e}}
     if(res.status!==404&&res.status!==429&&res.status<500)throw last;
   }
-  throw last||{code:0};
+  throw q429||last||{code:0};
 }
 function parseJSON(t){try{return JSON.parse(t)}catch(e){}const a=t.indexOf('{'),b=t.lastIndexOf('}');if(a>=0&&b>a)try{return JSON.parse(t.slice(a,b+1))}catch(e){}return null}
 const errTxt=e=>e==null?'':typeof e==='string'?e:(e.msg||e.message||(e.code!=null?'kód '+e.code:'')||(e.type?'událost '+e.type:'')||String(e));
-const aiErr=e=>e&&e.name==='AbortError'?'Zastaveno.':e&&e.code==='net'?e.msg+(/^AIza/.test(settings.aiKey||'')?'.':'. Klíč Gemini má začínat „AIza“ – vytvoř nový na aistudio.google.com/app/apikey.'):e&&e.code==='key'?'Klíč nefunguje'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'. Zkontroluj ho v Nastavení.':e&&e.code===429?'Vyčerpaný bezplatný limit'+(e.msg?' ('+String(e.msg).slice(0,120)+')':'')+'. Zkus to za chvíli nebo zítra.':e&&e.code===404?'Žádný model není pro tento klíč dostupný'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'.':!navigator.onLine?'Jsi offline. Čtení přes AI potřebuje internet.':'Přečíst fotku se nepovedlo: '+(errTxt(e)||'neznámá chyba').slice(0,160)+'. Zkus to znovu.';
+const quotaTxt=e=>{const q=e.quota||{};
+  if(q.zero)return 'Google tomuto klíči nedává žádný bezplatný limit (limit 0). Vytvoř nový klíč na aistudio.google.com → Get API key → Create API key → „Create API key in new project“ a vlož ho sem. Klíč by měl začínat „AIza“.';
+  if(q.day)return 'Dnešní bezplatný limit Googlu je vyčerpaný (u všech modelů, které klíč smí). Obnoví se zítra v 9:00. Do té doby počítej čárky ručně, nebo použij jiný klíč (jiný Google účet).';
+  return 'Google je teď přetížený nebo došel minutový limit. Zkus to za minutu.'+(e.msg?' ('+String(e.msg).slice(0,100)+')':'')};
+const aiErr=e=>e&&e.name==='AbortError'?'Zastaveno.':e&&e.code==='net'?e.msg+(/^AIza/.test(settings.aiKey||'')?'.':'. Klíč Gemini má začínat „AIza“ – vytvoř nový na aistudio.google.com/app/apikey.'):e&&e.code==='key'?'Klíč nefunguje'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'. Zkontroluj ho v Nastavení.':e&&e.code===429?quotaTxt(e):e&&e.code===404?'Žádný model není pro tento klíč dostupný'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'.':!navigator.onLine?'Jsi offline. Čtení přes AI potřebuje internet.':'Přečíst fotku se nepovedlo: '+(errTxt(e)||'neznámá chyba').slice(0,160)+'. Zkus to znovu.';
 const LAYOUT_PROMPT=`Na fotkách je ručně psaná hospodská účtenka (útrata jednoho člověka). Na začátku řádku je cena v Kč (např. 55, 35, 40, 30, 28, 25, 20, 18, někdy 145 nebo 250), za ní čárky = počet kusů.
 Pravidla:
 - každá svislá čárka = 1 kus; 4 čárky přeškrtnuté pátou šikmou čárkou = 5 kusů
@@ -578,7 +593,10 @@ async function readPhoto(pid,ph,status,signal){
   if(!rows.length)throw{code:'empty',msg:'Na fotce jsem nenašel žádné řádky'};
   status('Připravuji výřezy řádků…',2);const mid=(await shrink(rec.blob,2000,.9)).blob;const fimg=await imgFromBlob(mid);const crops=[];for(const x of rows)crops.push(x.box?await cropRow(fimg,x.box):null);
   const idx=rows.map((x,i)=>i).filter(i=>crops[i]);let A={},B={};
-  if(idx.length){status(`Počítám ${idx.length} ${plur(idx.length,'řádek','řádky','řádků')}, 2× souběžně…`,2);[A,B]=await Promise.all([countPass(rows,crops,idx,signal),countPass(rows,crops,[...idx].reverse(),signal)])}
+  if(idx.length){status(`Počítám ${idx.length} ${plur(idx.length,'řádek','řádky','řádků')}, 2× souběžně…`,2);const rs=await Promise.allSettled([countPass(rows,crops,idx,signal),countPass(rows,crops,[...idx].reverse(),signal)]);
+    if(signal&&signal.aborted)throw{name:'AbortError'};
+    rs.forEach((x,k)=>{if(x.status==='rejected')log('VAROV','přepočet '+(k+1)+' selhal – beru výsledek bez něj',errInfo(x.reason))});
+    A=rs[0].status==='fulfilled'?rs[0].value:{};B=rs[1].status==='fulfilled'?rs[1].value:{}}
   status('Hotovo',3);
   log('INFO','čtení: přepočty',{A,B});merge(rows,A,B);log('INFO','čtení: výsledek',rows.map(x=>[x.p,x.c,x.q?'?':'ok']));return rows;
 }
@@ -604,8 +622,8 @@ async function runAI(auto){
     $('apbar').style.width=pct.toFixed(1)+'%';$('appct').textContent=Math.round(pct)+' %';
     $('aptime').textContent=`${Math.round((Date.now()-t0)/1000)} s`;
     $('apsteps').innerHTML=STEPS.map((s,i)=>`<li class="${i<step?'done':i===step?'now':''}">${i<step?'✓':i===step?'<span class="spin"></span>':'○'} ${i===step&&step<3?esc(stage):s}</li>`).join('');
-    $('apnote').textContent=step===1||step===2?(chars?`Přijímám odpověď… ${chars} znaků`:thinking?'AI přemýšlí…':'Čekám na AI…')+((Date.now()-stepT)>60000?' · Google teď odpovídá pomalu, vydrž nebo Zastavit a Zkusit znovu.':''):'';};
-  aiChunk=(n,th)=>{chars=n;thinking=th;};
+    $('apnote').textContent=waitTo>Date.now()?`Google chce chvíli pauzu (limit za minutu) – zkusím znovu za ${Math.ceil((waitTo-Date.now())/1000)} s…`:step===1||step===2?(chars?`Přijímám odpověď… ${chars} znaků`:thinking?'AI přemýšlí…':'Čekám na AI…')+((Date.now()-stepT)>60000?' · Google teď odpovídá pomalu, vydrž nebo Zastavit a Zkusit znovu.':''):'';};
+  let waitTo=0;aiChunk=(n,th)=>{if(n<0){waitTo=Date.now()-n*1000;return}if(n===0)waitTo=0;chars=Math.max(0,n);thinking=th;};
   const tick=setInterval(draw,250);draw();
   try{
     const rows=await readPhoto(p.id,curPhoto,(t,s)=>{stage=t;if(s!=null&&s!==step){step=s;stepT=Date.now();chars=0;thinking=false}draw()},aiCtl.signal);clearInterval(tick);step=3;draw();setTimeout(()=>{prog.hidden=true},900);
@@ -995,7 +1013,7 @@ app.addEventListener('click',e=>{
   if(a==='delkey'){settings.aiKey='';saveSettings().then(()=>render());return}
   if(a==='testkey'){const k=$('kst');settings.aiKey=$('sk').value.trim();settings.aiModel=$('sm').value.trim();if(!settings.aiKey){k.className='status err';k.textContent='Nejdřív vlož klíč.';return}
     saveSettings();
-    k.className='status';k.textContent='Zjišťuji dostupné modely…';const userModel=settings.aiModel;listModels().then(l=>{if(!userModel&&l.length)settings.aiModel=l[0];k.textContent='Zkouším model '+(settings.aiModel||DEF_MODELS[0])+'…';return gemini([{text:'Odpověz jen slovem OK.'}],undefined,false)}).then(t=>{saveSettings();k.className='status ok';k.textContent='Klíč funguje ✓ (model: '+(settings.aiModel||DEF_MODELS[0])+')'},e=>{k.className='status err';k.textContent=aiErr(e).replace('Přečíst fotku se nepovedlo','Test klíče selhal')});return}
+    k.className='status';k.textContent='Zjišťuji dostupné modely…';const userModel=settings.aiModel;listModels().then(l=>{if(!userModel&&l.length)settings.aiModel=l[0];k.textContent='Zkouším model '+(settings.aiModel||DEF_MODELS[0])+'…';return gemini([{text:'Odpověz jen slovem OK.'}],undefined,false)}).then(t=>{saveSettings();k.className='status ok';k.textContent='Klíč funguje ✓ (model: '+(lastModel||settings.aiModel)+(lastModel&&lastModel!==settings.aiModel?' – hlavní model '+settings.aiModel+' má dnes vyčerpaný limit':'')+')'},e=>{k.className='status err';k.textContent=aiErr(e).replace('Přečíst fotku se nepovedlo','Test klíče selhal')});return}
   if(a==='sharekey'){const link=location.origin+location.pathname+'#k='+encodeURIComponent(settings.aiKey)+(settings.aiModel?'&m='+encodeURIComponent(settings.aiModel):'');
     const txt='Appka na účtenky: otevři odkaz v Safari, pak Sdílet → Přidat na plochu. AI čtení čárek je v odkazu už nastavené.\n'+link;
     if(navigator.share)navigator.share({title:'Účtenky',text:txt}).catch(()=>{});else copy(txt);return}
