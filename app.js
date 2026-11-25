@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=34;
+const APP_VER=35;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -725,7 +725,11 @@ function assignGroups(prices,groups,ph){const P=prices.filter(p=>p.box&&p.v>0);i
       box:g.box,pbox:best.box,spots:[],ph,ai:1,pai:best.v,pq:best.q?1:0,palts:[...(best.alts||[]),...near].filter((v,i,a)=>v!==best.v&&a.indexOf(v)===i),nopr:1,lc:g.c}})}
 async function sceneRead(blob,ph,signal){const parts=[{text:SCENE_PROMPT()},{inline_data:{mime_type:'image/jpeg',data:await b64(blob)}},...hwParts()];
   const raw=await aiCall(parts,signal,true);log('INFO','čtení: odpověď AI (ceny+čárky)',String(raw).slice(0,2000));const d=parseJSON(raw)||{};
-  const prices=(Array.isArray(d.prices)?d.prices:[]).map(x=>({v:num(x.value??x.price),box:readBox(x),q:x.uncertain?1:0,alts:Array.isArray(x.alts)?x.alts.map(num).filter(Boolean):[]}));
+  const L=priceList();
+  /* ocásek/podtržení přečtené jako další číslice: 407 → 40, 557 → 55 */
+  const fixV=v=>{if(!v||L.includes(v))return{v,f:0};const s=String(v);for(const k of [s.slice(0,-1),s.slice(1)])if(k&&L.includes(+k))return{v:+k,f:1};return{v,f:0}};
+  const prices=(Array.isArray(d.prices)?d.prices:[]).map(x=>{const r=fixV(num(x.value??x.price));return{v:r.v,box:readBox(x),q:x.uncertain?1:0,alts:Array.isArray(x.alts)?x.alts.map(num).filter(Boolean):[],fixed:r.f?num(x.value??x.price):0}});
+  prices.filter(p=>p.fixed).forEach(p=>log('INFO','čtení: cena upravena podle ceníku',[p.fixed,p.v]));
   const groups=(Array.isArray(d.groups)?d.groups:[]).map(x=>({c:num(x.count),box:readBox(x),q:x.uncertain?1:0,note:String(x.note||'').slice(0,150)}));
   log('INFO','čtení: ceny',prices.map(p=>[p.v,p.box&&p.box.map(v=>+v.toFixed(2))]));log('INFO','čtení: skupiny',groups.map(g=>[g.c,g.box&&g.box.map(v=>+v.toFixed(2))]));
   const rows=assignGroups(prices,groups,ph);log('INFO','čtení: přiřazení k nejbližší ceně',rows.map(x=>[x.p,x.c]));return rows}
