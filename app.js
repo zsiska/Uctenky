@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=35;
+const APP_VER=36;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -343,6 +343,8 @@ function renderSettings(){
     <p class="note2">Bezplatný klíč získáš na <b>aistudio.google.com</b> → Get API key → Create API key (stačí Google účet). Klíč se uloží jen v tomto telefonu.</p>
     <label class="f" for="sk">API klíč</label><input id="sk" type="password" autocomplete="off" value="${esc(settings.aiKey||'')}" placeholder="AIza…">
     <p class="note2" style="margin:6px 0 0">${settings.aiKey?(memMode?'<b style="color:var(--red)">⚠ Klíč platí jen do zavření – telefon nedovolil ukládat. Nejsi v anonymním okně Safari?</b>':'<b style="color:var(--ok)">✓ Klíč je uložený v telefonu</b>'):'Klíč se uloží hned po vložení.'} Na iPhonu má aplikace z ikony na ploše <b>vlastní</b> úložiště, oddělené od Safari – klíč vlož v appce spuštěné z ikony.</p>
+    <label class="chk" style="margin-top:10px"><input type="checkbox" id="sfree" ${freeOn()?'checked':''}> <b>Bezplatný klíč – pravidla proti chybám</b></label>
+    <p class="note2" style="margin:2px 0 8px">Dotazy na Google jdou po jednom s odstupem <input id="sfgap" inputmode="numeric" value="${esc(settings.freeGap||6)}" style="width:3em"> s, aby nenarazily na minutový limit. Appka nepřepíná na méně přesné „lite“ modely – když dojde limit, raději to řekne. Jedna fotka = asi 4–6 dotazů.${settings.useDay===new Date().toISOString().slice(0,10)?` Dnes odesláno <b>${settings.useN||0}</b> ${plur(settings.useN||0,'dotaz','dotazy','dotazů')}.`:''}</p>
     <label class="f" for="sm">Model (nech prázdné = automaticky)</label><input id="sm" value="${esc(settings.aiModel||'')}" placeholder="${DEF_MODELS[0]}">
     <div class="actions" style="margin-top:10px"><button class="pri" data-a="savekey">Uložit klíč</button><button data-a="testkey">Vyzkoušet</button>${settings.aiKey?'<button data-a="sharekey">Odkaz pro kolegu (s klíčem)</button><button class="danger" data-a="delkey">Smazat klíč</button>':''}</div>
     <p class="status" id="kst"></p>
@@ -554,8 +556,18 @@ async function aiCall(parts,signal,json){
     try{const r=await claudeAI(txt,{images:imgs,modelTier:'default',cache:false,signal});log('INFO','Claude odpověď',{ms:Date.now()-t,znaku:r.text.length,truncated:r.truncated,tier:r.modelTierApplied,zacatek:r.text.slice(0,200)});return r.text}
     catch(e){log('CHYBA','Claude selhal',{ms:Date.now()-t,...errInfo(e),text:e&&e.text?String(e.text).slice(0,200):undefined});if(e&&e.code==='cancelled')throw{name:'AbortError'};if(e&&(e.code==='not_granted'||e.code==='sampling_disabled'))throw{code:'key',msg:'Claude tu není povolený'};if(e&&e.code==='rate_limited')throw{code:429};throw{code:0,msg:e&&e.code==='upstream_error'?'spojení s Claudem se přerušilo. Nech displej rozsvícený a appku v popředí':(e&&(e.code?e.code+': ':'')+(e.message||''))||'neznámá chyba'}}
   }
-  return gemini(parts,signal,json);
+  return gQueue(()=>gemini(parts,signal,json),signal);
 }
+/* ---------- pravidla pro bezplatný klíč: dotazy po jednom s odstupem, denní počítadlo ---------- */
+const freeOn=()=>settings.freeMode!==false;
+let gChain=Promise.resolve(),gLast=0;
+function gQueue(fn,signal){const run=gChain.then(async()=>{
+    if(signal&&signal.aborted)throw{name:'AbortError'};
+    if(freeOn()){const gap=Math.max(1,+settings.freeGap||6)*1000;const w=gLast+gap-Date.now();
+      if(w>0){aiChunk&&aiChunk(-Math.ceil(w/1000),false);await new Promise((ok,ko)=>{const t=setTimeout(ok,w);signal&&signal.addEventListener('abort',()=>{clearTimeout(t);ko({name:'AbortError'})},{once:true})});aiChunk&&aiChunk(0,false)}}
+    gLast=Date.now();countUse();try{return await fn()}finally{gLast=Date.now()}});
+  gChain=freeOn()?run.catch(()=>{}):gChain;return run}
+function countUse(){const d=new Date().toISOString().slice(0,10);if(settings.useDay!==d){settings.useDay=d;settings.useN=0}settings.useN=(settings.useN||0)+1;saveSettings()}
 const maxImgs=()=>claudeAI&&!settings.aiKey?Math.max(2,claudeMax-1):30;
 const GAPI='https://generativelanguage.googleapis.com/v1beta';
 /* fetch na Google: nejdřív s klíčem v hlavičce, při síťové chybě (Safari „Load failed“) znovu s klíčem v adrese */
@@ -599,7 +611,7 @@ async function readSSE(res,onChunk){
 async function gemini(parts,signal,json){
   let models=settings.aiModel?[settings.aiModel]:[...DEF_MODELS];let last;let listed=false;let triedNoThink=false;const waited={};let q429=null,busy=null;
   const pause=async w=>{aiChunk&&aiChunk(-w,false);await new Promise((ok,ko)=>{const t=setTimeout(ok,w*1000);signal&&signal.addEventListener('abort',()=>{clearTimeout(t);ko({name:'AbortError'})},{once:true})});aiChunk&&aiChunk(0,false)};
-  const more=async lite=>{if(listed)return;listed=true;try{const l=await listModels();const rest=l.filter(x=>!models.includes(x));if(lite)rest.sort((a,b)=>(/lite/.test(b)?1:0)-(/lite/.test(a)?1:0));models.push(...rest.slice(0,5))}catch(e){if(e.code==='key')throw e}};
+  const more=async lite=>{if(listed)return;listed=true;try{const l=await listModels();let rest=l.filter(x=>!models.includes(x)&&!/tts|image|embed|live|audio|veo|imagen/i.test(x));if(freeOn()){rest=rest.filter(x=>!/lite/i.test(x));lite=false}if(lite)rest.sort((a,b)=>(/lite/.test(b)?1:0)-(/lite/.test(a)?1:0));models.push(...rest.slice(0,5))}catch(e){if(e.code==='key')throw e}};
   for(let i=0;i<models.length;i++){const m=models[i];const t0=Date.now();
     const stream=!!(window.ReadableStream&&TextDecoder);const cb=aiChunk;
     const res=await gfetch(`${GAPI}/models/${encodeURIComponent(m)}:${stream?'streamGenerateContent?alt=sse':'generateContent'}`,{method:'POST',signal,headers:{'Content-Type':'application/json'},
@@ -880,7 +892,7 @@ async function runAI(auto){
     $('apbar').style.width=pct.toFixed(1)+'%';$('appct').textContent=Math.round(pct)+' %';
     $('aptime').textContent=`${Math.round((Date.now()-t0)/1000)} s`;
     $('apsteps').innerHTML=STEPS.map((s,i)=>`<li class="${i<step?'done':i===step?'now':''}">${i<step?'✓':i===step?'<span class="spin"></span>':'○'} ${i===step&&step<3?esc(stage):s}</li>`).join('');
-    $('apnote').textContent=waitTo>Date.now()?`Google je vytížený – zkusím znovu za ${Math.ceil((waitTo-Date.now())/1000)} s…`:step===1||step===2?(chars?`Přijímám odpověď… ${chars} znaků`:thinking?'AI přemýšlí…':'Čekám na AI…')+((Date.now()-stepT)>60000?' · Google teď odpovídá pomalu, vydrž nebo Zastavit a Zkusit znovu.':''):'';};
+    $('apnote').textContent=waitTo>Date.now()?`Čekám na volný dotaz u Googlu – ${Math.ceil((waitTo-Date.now())/1000)} s…`:step===1||step===2?(chars?`Přijímám odpověď… ${chars} znaků`:thinking?'AI přemýšlí…':'Čekám na AI…')+((Date.now()-stepT)>60000?' · Google teď odpovídá pomalu, vydrž nebo Zastavit a Zkusit znovu.':''):'';};
   let waitTo=0;aiChunk=(n,th)=>{if(n<0){waitTo=Date.now()-n*1000;return}if(n===0)waitTo=0;chars=Math.max(0,n);thinking=th;};
   const tick=setInterval(draw,250);draw();
   try{
@@ -1210,6 +1222,8 @@ app.addEventListener('change',async e=>{
   if(t.id==='camq'||t.id==='galq'){const fs=[...t.files];t.value='';if(!fs.length)return;await quickCapture(fs[0]);return}
   const r=getR(curId);
   if(t.dataset.up){const fs=[...t.files];t.value='';if(fs.length)await addPhotos(fs);return}
+  if(t.id==='sfree'){settings.freeMode=t.checked;saveSettings();toast(t.checked?'Pravidla pro bezplatný klíč zapnuta':'Pravidla vypnuta – dotazy jdou souběžně');render();return}
+  if(t.id==='sfgap'){settings.freeGap=Math.min(30,Math.max(1,num(t.value)||6));saveSettings();toast('Odstup '+settings.freeGap+' s');return}
   if(t.id==='shw'){settings.hwNote=t.value;saveSettings();toast('Poznámka k písmu uložena');return}
   if(t.dataset.hwp){const s=hwSamples.find(s=>s.id===t.dataset.hwp);if(s){s.price=num(t.value);saveHw();toast('Vzor upraven')}return}
   if(t.id==='sbig'){settings.big=t.checked;document.body.classList.toggle('obs',t.checked);saveSettings();return}
