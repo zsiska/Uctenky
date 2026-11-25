@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=33;
+const APP_VER=34;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -160,6 +160,7 @@ function svgPhoto(r,pi,vb,mode,selIdx,extra){
   rowsOf(r).forEach((x,i)=>{if(!x.box||(x.ph||0)!==pi)return;
     if(mode==='all'||(mode==='one'&&i===selIdx)){inner+=rect(x.box,'b'+(x.q?' q':'')+(i===selIdx?' sel':''),mode==='all'?i:null);if(mode==='all')inner+=`<text x="${x.box[0]+.006}" y="${x.box[1]*H+.032}">${esc(x.p)}</text>`}
     if(i===selIdx)(x.spots||[]).forEach(s=>inner+=rect(s,'s'));
+    if(i===selIdx&&x.pbox)inner+=rect(x.pbox,'pb');
     if(i===selIdx&&mode==='one'&&x.box&&(x.ga||x.bad)){const bh=(x.box[3]-x.box[1])*H,ty=x.box[1]*H,by=x.box[3]*H,fs=Math.max(.016,Math.min(.034,bh*.3));
       const diff=seeDiff(x);
       (x.ga||[]).forEach((g,k)=>{inner+=`<g class="gA${diff.a.has(k)?' dif':''}"><line x1="${g[0]}" y1="${ty}" x2="${g[0]}" y2="${by}"/><rect x="${g[0]-fs*.62}" y="${ty-fs*1.25}" width="${fs*1.24}" height="${fs*1.15}" rx="${fs*.25}"/><text x="${g[0]}" y="${ty-fs*.67}" style="font-size:${fs*.85}px">${g[1]}</text></g>`});
@@ -435,7 +436,7 @@ function renderZoom(){
   if(zMode==='spot')zMode='row';if(zMode==='row'&&!x.box)zMode=hasPh?'mark':'row';if(zMode==='tap'&&!x.box)zMode='mark';
   document.querySelectorAll('#zoom [data-z]').forEach(b=>{b.setAttribute('aria-pressed',b.dataset.z===zMode);b.disabled=!hasPh||(!x.box&&(b.dataset.z==='row'||b.dataset.z==='tap'))});
   $('zmarkb').textContent=x.box?'✎ Přeznačit řádek':'✎ Označit řádek';
-  let vb=null;if((zMode==='row'||zMode==='tap')&&x.box)vb=padBox(x.box,zMode==='row'&&(x.ga||x.bad)?.06:.02,H);
+  let vb=null;if((zMode==='row'||zMode==='tap')&&x.box)vb=padBox(x.pbox?[Math.min(x.box[0],x.pbox[0]),Math.min(x.box[1],x.pbox[1]),Math.max(x.box[2],x.pbox[2]),Math.max(x.box[3],x.pbox[3])]:x.box,zMode==='row'&&(x.ga||x.bad)?.06:.02,H);
   $('zhint').textContent=zMode==='mark'?'Táhni prstem přes celý řádek.':zMode==='tap'?'Ťukni na každou čárku.':'';
   $('zlvl').textContent=zLevel+'×';
   const zb=$('zimg');zb.style.setProperty('--z',zMode==='mark'?1:zLevel);
@@ -685,7 +686,7 @@ async function cropRow(fimg,box,pbox){const W=fimg.naturalWidth,Hh=fimg.naturalH
 async function countPass(rows,crops,order,signal){
   const lim=maxImgs();if(order.length>lim){const out={};for(let i=0;i<order.length;i+=lim)Object.assign(out,await countPass(rows,crops,order.slice(i,i+lim),signal));return out}
   const ps=[{text:COUNT_PROMPT(order.length)+hwNote()}];
-  for(let k=0;k<order.length;k++){const i=order[k];ps.push({text:`Výřez ${k+1}: cena ${rows[i].p} Kč${rows[i].cover?' – POKRAČOVÁNÍ bez napsané ceny, počítej všechny čárky ve výřezu':''}${rows[i].note&&!rows[i].cover?' ('+rows[i].note+')':''}`});ps.push({inline_data:{mime_type:'image/jpeg',data:await b64(crops[i])}})}
+  for(let k=0;k<order.length;k++){const i=order[k];ps.push({text:`Výřez ${k+1}: cena ${rows[i].p} Kč${rows[i].cover?' – POKRAČOVÁNÍ bez napsané ceny, počítej všechny čárky ve výřezu':rows[i].nopr?' – výřez obsahuje JEN čárky (cena je mimo výřez); počítej všechny čárky, kousky čísel na okraji ignoruj':''}${rows[i].note&&!rows[i].cover?' ('+rows[i].note+')':''}`});ps.push({inline_data:{mime_type:'image/jpeg',data:await b64(crops[i])}})}
   const d=parseJSON(await aiCall(ps,signal,true));const out={};
   (d&&Array.isArray(d.counts)?d.counts:[]).forEach(c=>{const k=num(c.id)-1;const i=order[k];if(i==null)return;const bx=rows[i].box;
     const mx=v=>{if(!bx)return null;const x1=clamp01(bx[0]-.015),x2=clamp01(bx[2]+.015);return +(x1+(x2-x1)*clamp01(+v>1.5?(+v)/1000:v)).toFixed(4)};
@@ -701,6 +702,33 @@ function merge(rows,A,B){rows.forEach((x,i)=>{const a=A[i],b=B[i];const c0=x.c;x
   else if(x.box){x.q=1;x.note=(x.note?x.note+' · ':'')+'Řádek nebyl přepočítán zvlášť.'}
   if(!(+x.c>0)&&c0>0){x.q=1;x.alts=[0,c0];x.c=c0;x.note=`Při hledání řádků AI viděla ${c0}, při přepočtu 0. Zkontroluj.`}
   if(x.q&&!x.spots.length&&x.box)x.spots=[x.box]})}
+/* ---------- nové čtení: ceny a skupiny čárek zvlášť, přiřazení k nejbližší ceně v appce ---------- */
+const SCENE_PROMPT=()=>`Fotka ručně psané hospodské účtenky (útrata jednoho člověka). Na papíře jsou napsané CENY (čísla v Kč) a ČÁRKY (počet kusů).
+Najdi zvlášť:
+1) "prices" – VŠECHNA napsaná čísla/ceny na papíře, kdekoli (vlevo od čárek, nad nimi i POD nimi). U každé: "value" a "box_2d".
+   Písmo: číslice 5 se píše jako „T“/„τ“ (svislá + vodorovná nahoře; „55“ = „TT“ se společnou vodorovnou čarou, často s pomlčkou za ní). Číslo může mít ocásek nebo podtržení („40“ může vypadat jako „407“ nebo „40/“) – je to pořád jen cena 40.
+   CENÍK této hospody: ${priceList().join(', ')} Kč. Cena mimo ceník je podezřelá – pak "uncertain": true a "alts" s 1–3 cenami z ceníku, které tak mohou vypadat.
+2) "groups" – skupiny ČÁREK (svislé nebo šikmé tahy = kusy). Skupina = čárky blízko sebe. Velká mezera nebo jiný řádek = nová skupina. U každé: "count" (každá čárka 1, čtyři přeškrtnuté pátou = 5) a "box_2d" (jen čárky, BEZ číslic ceny).
+   Číslice ceny NIKDY nejsou čárky. Pomlčka za cenou není čárka.
+Projdi CELÝ papír až k dolnímu okraji. Ignoruj stůl, pozadí, podtácky a tištěný text. Žádná čárka nesmí chybět.
+box_2d je [ymin, xmin, ymax, xmax] v rozsahu 0–1000 vzhledem k celé fotce.
+Odpověz POUZE JSONem: {"prices":[{"value":55,"box_2d":[100,150,160,260],"uncertain":false,"alts":[]}],"groups":[{"count":3,"box_2d":[90,280,200,420],"uncertain":false,"note":""}]}`+hwNote();
+/* vzdálenost dvou rámečků (mezera), cena vlevo na stejném řádku má přednost */
+function boxGap(g,p){const gx=Math.max(0,p[0]-g[2],g[0]-p[2]),gy=Math.max(0,p[1]-g[3],g[1]-p[3]);let d=Math.hypot(gx,gy*1.15);
+  const ov=Math.max(0,Math.min(g[3],p[3])-Math.max(g[1],p[1]))/Math.max(1e-6,Math.min(g[3]-g[1],p[3]-p[1]));
+  if(ov>.4&&p[2]<=g[0]+.02)d*=.5; return d}
+function assignGroups(prices,groups,ph){const P=prices.filter(p=>p.box&&p.v>0);if(!P.length)return[];
+  return groups.filter(g=>g.box&&g.c>0).map(g=>{let best=P[0],bd=1e9,second=1e9;for(const p of P){const d=boxGap(g.box,p.box);if(d<bd){second=bd;bd=d;best=p}else if(d<second)second=d}
+    const amb=second<1e9&&second-bd<.015&&second<bd*1.25;
+    const near=P.filter(p=>p!==best&&boxGap(g.box,p.box)<bd*1.25+.015).map(p=>p.v);
+    return{p:best.v,c:g.c,q:g.q||best.q||amb?1:0,note:[amb?`Čárky jsou skoro stejně blízko cenám ${[best.v,...near].join(' a ')} – zkontroluj, ke které patří.`:'',g.note||''].filter(Boolean).join(' · '),
+      box:g.box,pbox:best.box,spots:[],ph,ai:1,pai:best.v,pq:best.q?1:0,palts:[...(best.alts||[]),...near].filter((v,i,a)=>v!==best.v&&a.indexOf(v)===i),nopr:1,lc:g.c}})}
+async function sceneRead(blob,ph,signal){const parts=[{text:SCENE_PROMPT()},{inline_data:{mime_type:'image/jpeg',data:await b64(blob)}},...hwParts()];
+  const raw=await aiCall(parts,signal,true);log('INFO','čtení: odpověď AI (ceny+čárky)',String(raw).slice(0,2000));const d=parseJSON(raw)||{};
+  const prices=(Array.isArray(d.prices)?d.prices:[]).map(x=>({v:num(x.value??x.price),box:readBox(x),q:x.uncertain?1:0,alts:Array.isArray(x.alts)?x.alts.map(num).filter(Boolean):[]}));
+  const groups=(Array.isArray(d.groups)?d.groups:[]).map(x=>({c:num(x.count),box:readBox(x),q:x.uncertain?1:0,note:String(x.note||'').slice(0,150)}));
+  log('INFO','čtení: ceny',prices.map(p=>[p.v,p.box&&p.box.map(v=>+v.toFixed(2))]));log('INFO','čtení: skupiny',groups.map(g=>[g.c,g.box&&g.box.map(v=>+v.toFixed(2))]));
+  const rows=assignGroups(prices,groups,ph);log('INFO','čtení: přiřazení k nejbližší ceně',rows.map(x=>[x.p,x.c]));return rows}
 /* přečte jednu fotku: vrátí řádky */
 /* ---------- ceny: ceník, pravidla oprav, vzory písma ---------- */
 const priceList=()=>(settings.prices&&settings.prices.length?settings.prices:DEF_PRICES).map(Number);
@@ -739,11 +767,14 @@ async function readPhoto(pid,ph,status,signal){
   for(const [a,b] of strips)parts.push({inline_data:{mime_type:'image/jpeg',data:await b64(await cropBlob(img,a,b))}});
   parts.push(...hwParts());
   log('INFO','čtení: obrázky připraveny',{full:Math.round(blob.size/1024)+'kB',w:img.naturalWidth,h:img.naturalHeight,pruhy:strips.length});
-  status('Hledám řádky a ceny…',1);
+  status('Hledám ceny a čárky…',1);
+  let rows=[];
+  if(settings.aiKey){try{rows=await sceneRead(blob,ph,signal)}catch(e){if(e&&e.name==='AbortError')throw e;if(e&&(e.code==='key'||e.code===429||e.code==='busy'))throw e;log('VAROV','čtení ceny+čárky selhalo, zkouším po řádcích',errInfo(e))}}
+  if(!rows.length){
   const raw=await aiCall(parts,signal,true);log('INFO','čtení: odpověď AI (řádky)',String(raw).slice(0,1800));const data=parseJSON(raw);if(data&&!Array.isArray(data.rows))data.rows=rowsOfJSON(data);
-  const rows=(data&&Array.isArray(data.rows)?data.rows:[]).map(x=>({p:num(x.price),c:num(x.count),q:x.uncertain?1:0,note:String(x.note||'').slice(0,200),
+  rows=(data&&Array.isArray(data.rows)?data.rows:[]).map(x=>({p:num(x.price),c:num(x.count),q:x.uncertain?1:0,note:String(x.note||'').slice(0,200),
     box:readBox(x),pbox:readPBox(x),spots:readSpot(x)?[readSpot(x)]:[],ph,ai:1,pai:num(x.price),pq:x.price_uncertain?1:0,palts:Array.isArray(x.price_alts)?x.price_alts.map(num).filter(Boolean):[]})).filter(x=>x.p||x.c);
-  log('INFO','čtení: řádky z 1. průchodu',rows.map(x=>[x.p,x.c,x.box?x.box.map(v=>+v.toFixed(2)):null]));
+  log('INFO','čtení: řádky z 1. průchodu',rows.map(x=>[x.p,x.c,x.box?x.box.map(v=>+v.toFixed(2)):null]));}
   if(!rows.length){log('VAROV','čtení: 1. průchod nenašel řádky – zkouším celou fotku jinak');status('Zkouším fotku přečíst jinak…',1);
     try{const fb=await regionRows(img,[0,0,1,1],ph,signal);rows.push(...fb.map(x=>({...x,split:0})))}catch(e){if(e&&e.name==='AbortError')throw e;log('VAROV','záložní čtení selhalo',errInfo(e))}}
   if(!rows.length)throw{code:'empty',msg:'AI na fotce nenašla žádné řádky s čárkami. Vyfoť účtenku zblízka, rovně a ostře (celý papír, bez stínu) a zkus to znovu.'};
@@ -752,7 +783,7 @@ async function readPhoto(pid,ph,status,signal){
   const med=medianH(rows);let pre=rows;if(med&&rows.some(x=>isTall(x,med))){log('INFO','čtení: vysoké rámečky',rows.filter(x=>isTall(x,med)).map(x=>x.p));pre=await splitRows(rows,fimg,signal,x=>isTall(x,med),status)}
   let kept=await countRows(pre.filter(x=>!x.split||x.ga===undefined),fimg,signal,status);kept=[...kept,...pre.filter(x=>x.split&&x.ga!==undefined)];
   /* AI při počítání viděla ve výřezu jiné ceny → rozdělit */
-  if(kept.some(x=>x.multi&&x.multi.length&&!x.split))kept=await splitRows(kept,fimg,signal,x=>x.multi&&x.multi.length&&!x.split,status);
+  if(kept.some(x=>x.multi&&x.multi.length&&!x.split&&!x.nopr))kept=await splitRows(kept,fimg,signal,x=>x.multi&&x.multi.length&&!x.split&&!x.nopr,status);
   /* kontrola úplnosti – nezůstaly čárky mimo rámečky? */
   try{status('Kontroluji, jestli nic nechybí…',2);const add=await coverRows(fimg,kept,ph,signal);
     if(add.length){log('INFO','úplnost: doplněno',add.map(x=>[x.p,x.c]));const cnt=await countRows(add,fimg,signal,status);cnt.forEach(x=>{if(!x.q){x.q=1;x.note=x.note+' – zkontroluj.'}});kept=[...kept,...cnt]}}
@@ -813,7 +844,7 @@ async function countRows(rows,fimg,signal,status){
   log('INFO','čtení: přepočty',{A,B});merge(rows,A,B);
   const drop=rows.filter(x=>!(+x.c>0)&&!(x.alts||[]).some(v=>v>0));if(drop.length)log('INFO','čtení: zahozeny řádky bez čárek',drop.map(x=>[x.p,x.box&&x.box.map(v=>+v.toFixed(2))]));
   return rows.filter(x=>!drop.includes(x))}
-const isTall=(x,med)=>x.box&&med>0&&(x.box[3]-x.box[1])>med*1.75;
+const isTall=(x,med)=>!x.nopr&&x.box&&med>0&&(x.box[3]-x.box[1])>med*1.75;
 function medianH(rows){const h=rows.filter(x=>x.box).map(x=>x.box[3]-x.box[1]).sort((a,b)=>a-b);return h.length>=3?h[Math.floor(h.length/2)]:0}
 async function splitRows(rows,fimg,signal,which,status){let out=[];for(let i=0;i<rows.length;i++){const x=rows[i];
     if(!which(x)){out.push(x);continue}
