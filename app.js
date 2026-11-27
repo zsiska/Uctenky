@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=37;
+const APP_VER=38;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -343,6 +343,9 @@ function renderSettings(){
     <p class="note2">Bezplatný klíč získáš na <b>aistudio.google.com</b> → Get API key → Create API key (stačí Google účet). Klíč se uloží jen v tomto telefonu.</p>
     <label class="f" for="sk">API klíč</label><input id="sk" type="password" autocomplete="off" value="${esc(settings.aiKey||'')}" placeholder="AIza…">
     <p class="note2" style="margin:6px 0 0">${settings.aiKey?(memMode?'<b style="color:var(--red)">⚠ Klíč platí jen do zavření – telefon nedovolil ukládat. Nejsi v anonymním okně Safari?</b>':'<b style="color:var(--ok)">✓ Klíč je uložený v telefonu</b>'):'Klíč se uloží hned po vložení.'} Na iPhonu má aplikace z ikony na ploše <b>vlastní</b> úložiště, oddělené od Safari – klíč vlož v appce spuštěné z ikony.</p>
+    <label class="f" for="srm">Způsob čtení</label>
+    <select id="srm"><option value="fast"${settings.readMode!=='exact'?' selected':''}>Rychlé – 1 dotaz, obvykle do 20 s (doporučeno)</option><option value="exact"${settings.readMode==='exact'?' selected':''}>Důkladné – přepočet a kontrola úplnosti, 3–5 dotazů, pomalé</option></select>
+    <p class="note2" style="margin:2px 0 8px">U rychlého čtení appka nejasná místa jen označí žlutě a projdeš je při kontrole.</p>
     <label class="chk" style="margin-top:10px"><input type="checkbox" id="sfree" ${freeOn()?'checked':''}> <b>Bezplatný klíč – pravidla proti chybám</b></label>
     <p class="note2" style="margin:2px 0 8px">Dotazy na Google jdou po jednom s odstupem <input id="sfgap" inputmode="numeric" value="${esc(settings.freeGap||6)}" style="width:3em"> s, aby nenarazily na minutový limit. Appka nepřepíná na méně přesné „lite“ modely – když dojde limit, raději to řekne. Jedna fotka = asi 4–6 dotazů.${settings.useDay===new Date().toISOString().slice(0,10)?` Dnes odesláno <b>${settings.useN||0}</b> ${plur(settings.useN||0,'dotaz','dotazy','dotazů')}.`:''}</p>
     <label class="f" for="sm">Model (nech prázdné = automaticky)</label><input id="sm" value="${esc(settings.aiModel||'')}" placeholder="${DEF_MODELS[0]}">
@@ -598,7 +601,7 @@ async function listModels(){
   return list;
 }
 let aiChunk=null,lastModel=''; /* callback(znaků) pro průběh */
-function thinkCfg(m){const mr=settings.noMediaRes?{}:{mediaResolution:'MEDIA_RESOLUTION_HIGH'};if(settings.noThink)return mr;if(/gemini-[3-9]/.test(m))return{...mr,thinkingConfig:{thinkingLevel:'low'}};if(/gemini-2\.5-flash/.test(m))return{...mr,thinkingConfig:{thinkingBudget:0}};return mr}
+function thinkCfg(m){const mr=settings.noMediaRes||settings.readMode!=='exact'?{}:{mediaResolution:'MEDIA_RESOLUTION_HIGH'};if(settings.noThink)return mr;if(/gemini-[3-9]/.test(m))return{...mr,thinkingConfig:{thinkingLevel:settings.readMode!=='exact'&&!settings.noMinimal?'minimal':'low'}};if(/gemini-2\.5-flash/.test(m))return{...mr,thinkingConfig:{thinkingBudget:0}};return mr}
 function thinkCfg_old(m){if(settings.noThink)return{};if(/gemini-[3-9]/.test(m))return{thinkingConfig:{thinkingLevel:'low'}};if(/gemini-2\.5-flash/.test(m))return{thinkingConfig:{thinkingBudget:0}};return{}}
 async function readSSE(res,onChunk){
   const rd=res.body.getReader();const dec=new TextDecoder();let buf='',txt='';
@@ -614,20 +617,25 @@ async function gemini(parts,signal,json){
   const more=async lite=>{if(listed)return;listed=true;try{const l=await listModels();let rest=l.filter(x=>!models.includes(x)&&!/tts|image|embed|live|audio|veo|imagen/i.test(x));if(freeOn()){rest=rest.filter(x=>!/lite/i.test(x));lite=false}if(lite)rest.sort((a,b)=>(/lite/.test(b)?1:0)-(/lite/.test(a)?1:0));models.push(...rest.slice(0,5))}catch(e){if(e.code==='key')throw e}};
   for(let i=0;i<models.length;i++){const m=models[i];const t0=Date.now();
     const stream=!!(window.ReadableStream&&TextDecoder);const cb=aiChunk;
-    const res=await gfetch(`${GAPI}/models/${encodeURIComponent(m)}:${stream?'streamGenerateContent?alt=sse':'generateContent'}`,{method:'POST',signal,headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0,...thinkCfg(m),...(json?{responseMimeType:'application/json'}:{})}})});
+    const tc=new AbortController();let timedOut=false;const tmo=setTimeout(()=>{timedOut=true;tc.abort()},(+settings.aiTimeout||40)*1000);const onAb=()=>tc.abort();signal&&signal.addEventListener('abort',onAb,{once:true});
+    let res;try{res=await gfetch(`${GAPI}/models/${encodeURIComponent(m)}:${stream?'streamGenerateContent?alt=sse':'generateContent'}`,{method:'POST',signal:tc.signal,headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0,...thinkCfg(m),...(json?{responseMimeType:'application/json'}:{})}})})}
+    catch(e){if(!timedOut){clearTimeout(tmo);throw e}res=null}
+    const done=()=>{clearTimeout(tmo);signal&&signal.removeEventListener('abort',onAb)};
+    if(!res){done();last={code:504,msg:`Google neodpověděl do ${+settings.aiTimeout||40} s`};log('CHYBA','Gemini '+m,last);busy={code:'busy',msg:last.msg};const n=waited[m]||0;if(n<1){waited[m]=n+1;i--;continue}await more(false);continue}
     log('INFO','Gemini '+m,{status:res.status,stream});
     let st=res.status;
     if(res.ok){let t='';try{
       if(stream&&res.body){t=await readSSE(res,cb)}else{const d=await res.json();t=(d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('')}
       log('INFO','Gemini odpověď',{ms:Date.now()-t0,znaku:t.length});
-      if(!t)throw{code:'empty',msg:'model vrátil prázdnou odpověď'};if(settings.aiModel!==m&&!q429){settings.aiModel=m;saveSettings()}lastModel=m;if(q429||busy)log('INFO','obejito jiným pokusem/modelem',m);return t
-      }catch(e){if(e&&(e.name==='AbortError'||e.code==='empty'))throw e;st=typeof e.code==='number'?e.code:503;last={code:st,msg:errTxt(e)};log('CHYBA','Gemini '+m+' (během odpovědi)',last)}}
-    else{last=await gErr(res);log('CHYBA','Gemini '+m,last)}
+      if(!t)throw{code:'empty',msg:'model vrátil prázdnou odpověď'};if(settings.aiModel!==m&&!q429){settings.aiModel=m;saveSettings()}done();lastModel=m;if(q429||busy)log('INFO','obejito jiným pokusem/modelem',m);return t
+      }catch(e){done();if(timedOut){e={code:504,msg:`Google neodpověděl do ${+settings.aiTimeout||40} s`}}else if(e&&(e.name==='AbortError'||e.code==='empty'))throw e;st=typeof e.code==='number'?e.code:503;last={code:st,msg:errTxt(e)};log('CHYBA','Gemini '+m+' (během odpovědi)',last)}}
+    else{done();last=await gErr(res);log('CHYBA','Gemini '+m,last)}
     if(st>=500||/high demand|overloaded|UNAVAILABLE|try again later/i.test(last.msg||'')){busy={code:'busy',msg:last.msg};
       /* přetížený model: 2× počkat a zkusit znovu, pak jiný model */
       const n=waited[m]||0;if(n<2){waited[m]=n+1;const w=n?10:4;log('INFO','model přetížený – čekám',{s:w,model:m});await pause(w);i--;continue}
       await more(false);continue}
+    if(st===400&&/minimal/i.test(last.msg)&&!settings.noMinimal){settings.noMinimal=true;saveSettings();i--;continue}
     if(st===400&&/media.?resolution/i.test(last.msg)&&!settings.noMediaRes){settings.noMediaRes=true;saveSettings();i--;continue}
     if(st===400&&/think/i.test(last.msg)&&!triedNoThink){triedNoThink=true;settings.noThink=true;saveSettings();i--;continue}
     if(st===400&&/api.?key/i.test(last.msg))throw{code:'key',msg:last.msg};
@@ -787,7 +795,7 @@ function hwParts(){if(!settings.aiKey||!hwSamples.length)return[];const ps=[{tex
 async function readPhoto(pid,ph,status,signal){
   const rec=await getOne('photos',pid);if(!rec)throw{code:'empty',msg:'Fotka chybí'};
   status('Připravuji fotku…',0);
-  const {blob}=await shrink(rec.blob,settings.aiKey?2400:1600,.88);const img=await imgFromBlob(blob);
+  const {blob}=await shrink(rec.blob,settings.aiKey&&settings.readMode==='exact'?2400:1600,.88);const img=await imgFromBlob(blob);
   const lim=settings.aiKey?1:claudeAI?claudeMax:4;const strips=lim>=4?[[0,.4],[.3,.7],[.6,1]]:lim>=3?[[0,.55],[.45,1]]:[];
   const stripTxt=strips.length?'Obrázek 1 je celá fotka. '+strips.map((s,i)=>`Obrázek ${i+2} je výřez celé šířky ve vyšším rozlišení, výška ${String(s[0]).replace('.',',')}–${String(s[1]).replace('.',',')}`).join('; ')+' (zlomky výšky celé fotky). Překryvy nepočítej dvakrát.':'Obrázek 1 je celá fotka.';
   const F=settings.priceFix||[];
@@ -807,6 +815,11 @@ async function readPhoto(pid,ph,status,signal){
   if(!rows.length){log('VAROV','čtení: 1. průchod nenašel řádky – zkouším celou fotku jinak');status('Zkouším fotku přečíst jinak…',1);
     try{const fb=await regionRows(img,[0,0,1,1],ph,signal);rows.push(...fb.map(x=>({...x,split:0})))}catch(e){if(e&&e.name==='AbortError')throw e;log('VAROV','záložní čtení selhalo',errInfo(e))}}
   if(!rows.length)throw{code:'empty',msg:'AI na fotce nenašla žádné řádky s čárkami. Vyfoť účtenku zblízka, rovně a ostře (celý papír, bez stínu) a zkus to znovu.'};
+  /* RYCHLÉ čtení: jeden dotaz – ceny a čárky z první odpovědi, sporné jen označit ke kontrole */
+  if(settings.readMode!=='exact'&&rows.length&&rows.every(x=>x.nopr)){
+    rows.forEach(x=>{x.ga=null;x.gb=null;x.bad=[];if(x.q&&!x.note)x.note='AI si tu není jistá – zkontroluj počet.'});
+    fixPrices(rows);rows.sort((a,b)=>(a.box[1]-b.box[1])||(a.box[0]-b.box[0]));status('Hotovo',3);
+    log('INFO','čtení: rychlý výsledek',rows.map(x=>[x.p,x.c,x.q?'?':'ok']));return rows}
   status('Připravuji výřezy řádků…',2);const mid=(await shrink(rec.blob,2400,.9)).blob;const fimg=await imgFromBlob(mid);
   /* příliš vysoké rámečky = nejspíš víc řádků v jednom → rozdělit hned */
   const med=medianH(rows);let pre=rows;if(med&&rows.some(x=>isTall(x,med))){log('INFO','čtení: vysoké rámečky',rows.filter(x=>isTall(x,med)).map(x=>x.p));pre=await splitRows(rows,fimg,signal,x=>isTall(x,med),status)}
@@ -923,7 +936,7 @@ async function runAI(auto){
     const rows=await readPhoto(p.id,curPhoto,(t,s)=>{stage=t;if(s!=null&&s!==step){step=s;stepT=Date.now();chars=0;thinking=false}draw()},aiCtl.signal);clearInterval(tick);step=3;draw();setTimeout(()=>{prog.hidden=true},900);
     r.pendingAI=false;save(r);
     aiResult=rows;const q=rows.reduce((a,x)=>a+x.c,0),t=rows.reduce((a,x)=>a+x.c*x.p,0),f=rows.filter(x=>x.q).length;
-    st.className='status ok';st.textContent=`Hotovo: ${rows.length} ${plur(rows.length,'řádek','řádky','řádků')}, ${q} ks, ${kc(t)}. Ke kontrole: ${f}.`;
+    st.className='status ok';const secs=Math.round((Date.now()-t0)/1000);log('INFO','čtení trvalo',{s:secs,rezim:settings.readMode||'fast'});st.textContent=`Hotovo za ${secs} s: ${rows.length} ${plur(rows.length,'řádek','řádky','řádků')}, ${q} ks, ${kc(t)}. Ke kontrole: ${f}.`;
     pr.textContent=rows.map(x=>`${x.p} Kč × ${x.c}${x.q?'  ⚠ '+x.note:''}`).join('\n');
     $('arep').disabled=$('aadd').disabled=false;
     if(auto&&!rowsOf(r).some(x=>(x.ph||0)===curPhoto)){setTimeout(()=>applyAI(true,true),500)}
@@ -1246,6 +1259,7 @@ app.addEventListener('change',async e=>{
   if(t.id==='camq'||t.id==='galq'){const fs=[...t.files];t.value='';if(!fs.length)return;await quickCapture(fs[0]);return}
   const r=getR(curId);
   if(t.dataset.up){const fs=[...t.files];t.value='';if(fs.length)await addPhotos(fs);return}
+  if(t.id==='srm'){settings.readMode=t.value;saveSettings();toast(t.value==='exact'?'Důkladné čtení':'Rychlé čtení');return}
   if(t.id==='sfree'){settings.freeMode=t.checked;saveSettings();toast(t.checked?'Pravidla pro bezplatný klíč zapnuta':'Pravidla vypnuta – dotazy jdou souběžně');render();return}
   if(t.id==='sfgap'){settings.freeGap=Math.min(30,Math.max(1,num(t.value)||6));saveSettings();toast('Odstup '+settings.freeGap+' s');return}
   if(t.id==='shw'){settings.hwNote=t.value;saveSettings();toast('Poznámka k písmu uložena');return}
