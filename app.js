@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=45;
+const APP_VER=46;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -657,9 +657,10 @@ async function gemini(parts,signal,json){
 function rowsOfJSON(d){if(!d)return[];if(Array.isArray(d))return d;for(const k of ['rows','items','polozky','položky','lines','radky','řádky','data'])if(Array.isArray(d[k]))return d[k];const v=Object.values(d).find(Array.isArray);return v||[]}
 function parseJSON(t){try{return JSON.parse(t)}catch(e){}const a=t.indexOf('{'),b=t.lastIndexOf('}');if(a>=0&&b>a)try{return JSON.parse(t.slice(a,b+1))}catch(e){}return null}
 const errTxt=e=>e==null?'':typeof e==='string'?e:(e.msg||e.message||(e.code!=null?'kód '+e.code:'')||(e.type?'událost '+e.type:'')||String(e));
+function resetTxt(){try{const now=new Date();const pt=new Date(now.toLocaleString('en-US',{timeZone:'America/Los_Angeles'}));const mid=new Date(pt);mid.setHours(24,0,0,0);const at=new Date(now.getTime()+(mid-pt));const t=at.toLocaleTimeString('cs-CZ',{hour:'2-digit',minute:'2-digit'});return (at.getDate()===now.getDate()?'dnes v ':'zítra v ')+t}catch(e){return 'v 9:00'}}
 const quotaTxt=e=>{const q=e.quota||{};
   if(q.zero)return 'Google tomuto klíči nedává žádný bezplatný limit (limit 0). Vytvoř nový klíč na aistudio.google.com → Get API key → Create API key → „Create API key in new project“ a vlož ho sem. Klíč by měl začínat „AIza“.';
-  if(q.day)return 'Dnešní bezplatný limit Googlu je vyčerpaný (u všech modelů, které klíč smí). Obnoví se zítra v 9:00. Do té doby počítej čárky ručně, nebo použij jiný klíč (jiný Google účet).';
+  if(q.day)return 'Dnešní bezplatný limit Googlu je vyčerpaný (u všech modelů, které klíč smí). Obnoví se '+resetTxt()+'. Do té doby počítej čárky ručně, nebo použij jiný klíč (jiný Google účet).';
   return 'Google je teď přetížený nebo došel minutový limit. Zkus to za minutu.'+(e.msg?' ('+String(e.msg).slice(0,100)+')':'')};
 const aiErr=e=>e&&e.name==='AbortError'?'Zastaveno.':e&&e.code==='net'?e.msg+(/^AIza/.test(settings.aiKey||'')?'.':'. Klíč Gemini má začínat „AIza“ – vytvoř nový na aistudio.google.com/app/apikey.'):e&&e.code==='key'?'Klíč nefunguje'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'. Zkontroluj ho v Nastavení.':e&&e.code===429?quotaTxt(e):e&&e.code==='busy'?'Google teď odpovídá moc pomalu nebo je přetížený'+(e.msg&&/neodpověděl/.test(e.msg)?' ('+e.msg+')':'')+'. Appka to zkusila znovu i s jiným modelem. Zkus to za pár minut – fotka zůstává uložená.':e&&e.code===404?'Žádný model není pro tento klíč dostupný'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'.':!navigator.onLine?'Jsi offline. Čtení přes AI potřebuje internet.':'Přečíst fotku se nepovedlo: '+(errTxt(e)||'neznámá chyba').slice(0,160)+'. Zkus to znovu.';
 const LAYOUT_PROMPT=`Na fotkách je ručně psaná hospodská účtenka (útrata jednoho člověka). Na začátku řádku je cena v Kč (např. 55, 35, 40, 30, 28, 25, 20, 18, někdy 145 nebo 250), za ní čárky = počet kusů.
