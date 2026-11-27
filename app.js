@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=40;
+const APP_VER=41;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -345,7 +345,7 @@ function renderSettings(){
     <label class="f" for="sk">API klíč</label><input id="sk" type="password" autocomplete="off" value="${esc(settings.aiKey||'')}" placeholder="AIza…">
     <p class="note2" style="margin:6px 0 0">${settings.aiKey?(memMode?'<b style="color:var(--red)">⚠ Klíč platí jen do zavření – telefon nedovolil ukládat. Nejsi v anonymním okně Safari?</b>':'<b style="color:var(--ok)">✓ Klíč je uložený v telefonu</b>'):'Klíč se uloží hned po vložení.'} Na iPhonu má aplikace z ikony na ploše <b>vlastní</b> úložiště, oddělené od Safari – klíč vlož v appce spuštěné z ikony.</p>
     <label class="f" for="srm">Způsob čtení</label>
-    <select id="srm"><option value="fast"${settings.readMode!=='exact'?' selected':''}>Rychlé – 1 dotaz, obvykle do 20 s (doporučeno)</option><option value="exact"${settings.readMode==='exact'?' selected':''}>Důkladné – přepočet a kontrola úplnosti, 3–5 dotazů, pomalé</option></select>
+    <select id="srm"><option value="fast"${settings.readMode!=='exact'?' selected':''}>Rychlé – 2 dotazy (najít + spočítat ve výřezech), doporučeno</option><option value="exact"${settings.readMode==='exact'?' selected':''}>Důkladné – přepočet a kontrola úplnosti, 3–5 dotazů, pomalé</option></select>
     <p class="note2" style="margin:2px 0 8px">U rychlého čtení appka nejasná místa jen označí žlutě a projdeš je při kontrole.</p>
     <label class="chk" style="margin-top:10px"><input type="checkbox" id="sfree" ${freeOn()?'checked':''}> <b>Bezplatný klíč – pravidla proti chybám</b></label>
     <p class="note2" style="margin:2px 0 8px">Dotazy na Google jdou po jednom s odstupem <input id="sfgap" inputmode="numeric" value="${esc(settings.freeGap||6)}" style="width:3em"> s, aby nenarazily na minutový limit. Appka nepřepíná na méně přesné „lite“ modely – když dojde limit, raději to řekne. Jedna fotka = asi 4–6 dotazů.${settings.useDay===new Date().toISOString().slice(0,10)?` Dnes odesláno <b>${settings.useN||0}</b> ${plur(settings.useN||0,'dotaz','dotazy','dotazů')}.`:''}</p>
@@ -835,7 +835,14 @@ async function readPhoto(pid,ph,status,signal){
   if(!rows.length)throw{code:'empty',msg:'AI na fotce nenašla žádné řádky s čárkami. Vyfoť účtenku zblízka, rovně a ostře (celý papír, bez stínu) a zkus to znovu.'};
   /* RYCHLÉ čtení: jeden dotaz – ceny a čárky z první odpovědi, sporné jen označit ke kontrole */
   if(settings.readMode!=='exact'&&rows.length&&rows.every(x=>x.nopr)){
-    rows.forEach(x=>{x.ga=null;x.gb=null;x.bad=[];if(x.q&&!x.note)x.note='AI si tu není jistá – zkontroluj počet.'});
+    /* počty z celé fotky jsou hrubé → každý řádek ještě jednou spočítat ze zvětšeného výřezu (1 dotaz na všechny řádky) */
+    try{status('Počítám čárky ve zvětšených výřezech…',2);const fimg=await imgFromBlob((await shrink(rec.blob,2400,.9)).blob);const crops=[];for(const x of rows)crops.push(await cropRow(fimg,x.box,null));
+      const idx=rows.map((x,i)=>i);const A=await countPass(rows,crops,idx,signal);
+      rows.forEach((x,i)=>{const a=A[i];x.ga=a&&a.g&&a.g.length?a.g:null;x.gb=null;x.bad=(a&&a.bad)||[];if(!a)return;
+        if(a.c===x.lc){x.c=a.c;if(a.q){x.q=1;x.note=(x.note?x.note+' · ':'')+(a.n||'AI si tu není jistá')}}
+        else{x.c=a.c;x.q=1;x.alts=[...new Set([a.c,x.lc])].sort((m,n)=>m-n);x.note=`Celá fotka: ${x.lc}, zvětšený výřez: ${a.c}. Přepočítej (Ťukat čárky).`+(x.note?' · '+x.note:'')}})}
+    catch(e){if(e&&e.name==='AbortError')throw e;log('VAROV','přepočet výřezů selhal – beru počty z celé fotky',errInfo(e));rows.forEach(x=>{x.q=1;x.note='Počet jen z celé fotky – zkontroluj.'})}
+    rows.forEach(x=>{if(x.q&&!x.note)x.note='AI si tu není jistá – zkontroluj počet.'});
     fixPrices(rows);rows.sort((a,b)=>(a.box[1]-b.box[1])||(a.box[0]-b.box[0]));status('Hotovo',3);
     log('INFO','čtení: rychlý výsledek',rows.map(x=>[x.p,x.c,x.q?'?':'ok']));return rows}
   status('Připravuji výřezy řádků…',2);const mid=(await shrink(rec.blob,2400,.9)).blob;const fimg=await imgFromBlob(mid);
