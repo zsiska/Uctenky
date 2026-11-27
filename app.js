@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=46;
+const APP_VER=48;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -47,7 +47,9 @@ const getOneRaw=(store,key)=>memMode&&!idb?Promise.resolve(undefined):new Promis
 
 let receipts=[],settings={email:'',prices:DEF_PRICES,aiKey:'',aiModel:'',issuer:'',issuerInfo:'',payPrefix:'',payNext:1,signature:'',eetMode:'off',eetMojeUrl:'https://eet.gov.cz',eetUrl:'',eetToken:'',eetJednotka:'',eetPokl:'',eetOvereni:false};
 let hwSamples=[];const saveHw=()=>memMode?Promise.resolve():tx('kv','readwrite',s=>s.put(hwSamples,'hw')).catch(e=>goMem(e));
-let claudeAI=null,claudeMax=0,claudeDl=null,claudeMcp=null;const hasAI=()=>!!(claudeAI||settings.aiKey);
+let claudeAI=null,claudeMax=0,claudeDl=null,claudeMcp=null;const isOAI=()=>settings.provider==='oai';const extAI=()=>isOAI()?!!(settings.oaiKey&&settings.oaiModel&&settings.oaiUrl):!!settings.aiKey;const hasAI=()=>!!(claudeAI||extAI());
+const allKeys=()=>[settings.aiKey,...String(settings.aiKeys2||'').split(/[\s,;]+/)].map(s=>(s||'').trim()).filter((s,i,a)=>s&&a.indexOf(s)===i);
+function curKey(){const k=allKeys();const d=new Date().toISOString().slice(0,10);if(settings.keyDay!==d){settings.keyDay=d;settings.keyIdx=0}return k[Math.min(settings.keyIdx||0,k.length-1)]||settings.aiKey}
 const DEF_MODELS=['gemini-3.8-flash','gemini-3.7-flash','gemini-3.6-flash','gemini-3.5-flash','gemini-2.5-flash'];
 let debtSel='',view='list',curId=null,curPhoto=0,filter='open',query='',person='';
 const photoURLs=new Map();
@@ -218,8 +220,8 @@ function renderDetail(){
     ${photos.length?'':'<p class="note2 pad" style="padding-top:0">Tip pro přesné čtení: fotit kolmo shora, při dobrém světle a bez stínu, účtenku narovnat a nechat vyplnit celý snímek. Dlouhou účtenku vyfoť po částech.</p>'}
     ${photos.length?`<div class="pad" style="padding-top:0">
       <details open><summary style="min-height:44px;display:flex;align-items:center;font-weight:600">Fotka s řádky (klepni na rámeček)</summary>${svgPhoto(r,curPhoto,null,'all',-1)}</details>
-      <div class="actions" style="margin-top:8px">${hasAI()?`<button class="pri" data-a="ai" ${navigator.onLine?'':'disabled'}>${r.pendingAI?'Čeká na internet – přečíst teď':'Přečíst čárky z fotky (AI)'}</button>`:`<button class="ghost" data-nav-go="settings">Zapnout čtení čárek přes AI</button>`}<button class="mini ghost" data-a="delphoto" style="margin-left:auto;color:var(--red)">Smazat fotku</button></div>
-      ${hasAI()&&!navigator.onLine?'<p class="note2">Čtení přes AI potřebuje internet. Počítat ručně jde i offline.</p>':''}
+      <div class="actions" style="margin-top:8px">${rowsOf(r).some(x=>x.box&&(x.ph||0)===curPhoto)?`<button data-a="localall"${settings.readMode==='local'?' class="pri"':''}>📱 Spočítat v telefonu (bez AI)</button>`:''}${settings.readMode==='local'?'':hasAI()?`<button class="pri" data-a="ai" ${navigator.onLine?'':'disabled'}>${r.pendingAI?'Čeká na internet – přečíst teď':'Přečíst čárky z fotky (AI)'}</button>`:`<button class="ghost" data-nav-go="settings">Zapnout čtení čárek přes AI</button>`}<button class="mini ghost" data-a="delphoto" style="margin-left:auto;color:var(--red)">Smazat fotku</button></div>
+      ${settings.readMode==='local'?'<p class="note2">Bez AI: dole klepni na cenu, na fotce táhni prstem přes její čárky (bez ceny) – appka je spočítá a pod každou dá tečku.</p>':''}${hasAI()&&!navigator.onLine?'<p class="note2">Čtení přes AI potřebuje internet. Počítat ručně jde i offline.</p>':''}
     </div>`:''}
   </div>
 
@@ -339,14 +341,28 @@ function renderSettings(){
     <div class="actions" style="margin-top:10px"><button class="pri" data-a="saveeet">Uložit EET</button></div>
   </div></div>
   <div class="card"><div class="pad">
-    <b>Čtení čárek přes AI</b>
+    <b>Čtení čárek (AI nebo v telefonu)</b>
     ${claudeAI?'<p class="status ok">Běží v Claude: čárky čte Claude přes tvůj účet, klíč není potřeba. Pokud níže vložíš klíč Gemini, použije se ten.</p>':''}
+    <label class="f" for="sprov">Kdo čte fotky</label>
+    <select id="sprov"><option value="gemini"${isOAI()?'':' selected'}>Google Gemini (bezplatný klíč)</option><option value="oai"${isOAI()?' selected':''}>Jiný poskytovatel AI (OpenAI-kompatibilní)</option></select>
+    ${isOAI()?`<div class="oai">
+      <p class="note2">Zadej adresu, klíč a model, který umí číst obrázky. Ne každý poskytovatel dovolí volání přímo z prohlížeče – použij Vyzkoušet.</p>
+      <label class="f" for="soprs">Předvolba</label><select id="soprs"><option value="">— vyber —</option><option value="https://openrouter.ai/api/v1">OpenRouter</option><option value="https://api.mistral.ai/v1">Mistral</option><option value="https://api.groq.com/openai/v1">Groq</option><option value="https://api.openai.com/v1">OpenAI</option></select>
+      <label class="f" for="sourl">Adresa (base URL)</label><input id="sourl" value="${esc(settings.oaiUrl||'')}" placeholder="https://…/v1">
+      <label class="f" for="sokey">Klíč</label><input id="sokey" type="password" autocomplete="off" value="${esc(settings.oaiKey||'')}">
+      <label class="f" for="somod">Model (s podporou obrázků)</label><input id="somod" value="${esc(settings.oaiModel||'')}" placeholder="název modelu u poskytovatele">
+      <div class="actions" style="margin-top:10px"><button class="pri" data-a="saveoai">Uložit</button><button data-a="testoai">Vyzkoušet</button></div><p class="status" id="ost"></p></div>`:''}
+    <div ${isOAI()?'hidden':''}>
     <p class="note2"><b>Google Gemini (zdarma)</b> – pro verzi mimo Claude (GitHub, kolega).</p>
     <p class="note2">Bezplatný klíč získáš na <b>aistudio.google.com</b> → Get API key → Create API key (stačí Google účet). Klíč se uloží jen v tomto telefonu.</p>
     <label class="f" for="sk">API klíč</label><input id="sk" type="password" autocomplete="off" value="${esc(settings.aiKey||'')}" placeholder="AIza…">
     <p class="note2" style="margin:6px 0 0">${settings.aiKey?(memMode?'<b style="color:var(--red)">⚠ Klíč platí jen do zavření – telefon nedovolil ukládat. Nejsi v anonymním okně Safari?</b>':'<b style="color:var(--ok)">✓ Klíč je uložený v telefonu</b>'):'Klíč se uloží hned po vložení.'} Na iPhonu má aplikace z ikony na ploše <b>vlastní</b> úložiště, oddělené od Safari – klíč vlož v appce spuštěné z ikony.</p>
+    <label class="f" for="sk2">Záložní klíče Gemini (jeden na řádek)</label>
+    <textarea id="sk2" rows="2" placeholder="další klíč z jiného Google účtu/projektu">${esc(settings.aiKeys2||'')}</textarea>
+    <p class="note2" style="margin:2px 0 8px">Když jeden klíč vyčerpá denní limit, appka sama přepne na další.${allKeys().length>1?` Dnes používá klíč č. ${Math.min((settings.keyIdx||0),allKeys().length-1)+1} z ${allKeys().length}.`:''}</p>
+    </div>
     <label class="f" for="srm">Způsob čtení</label>
-    <select id="srm"><option value="fast"${settings.readMode!=='exact'?' selected':''}>Rychlé – 2 dotazy (najít + spočítat ve výřezech), doporučeno</option><option value="exact"${settings.readMode==='exact'?' selected':''}>Důkladné – přepočet a kontrola úplnosti, 3–5 dotazů, pomalé</option></select>
+    <select id="srm"><option value="fast"${!settings.readMode||settings.readMode==='fast'?' selected':''}>Rychlé – 2 dotazy (najít + spočítat ve výřezech), doporučeno</option><option value="exact"${settings.readMode==='exact'?' selected':''}>Důkladné – přepočet a kontrola úplnosti, 3–5 dotazů, pomalé</option><option value="local"${settings.readMode==='local'?' selected':''}>Bez AI – v telefonu: řádek označíš prstem, čárky spočítá telefon (offline, bez limitu)</option></select>
     <p class="note2" style="margin:2px 0 8px">U rychlého čtení appka nejasná místa jen označí žlutě a projdeš je při kontrole.</p>
     <label class="chk" style="margin-top:10px"><input type="checkbox" id="sfree" ${freeOn()?'checked':''}> <b>Bezplatný klíč – pravidla proti chybám</b></label>
     <p class="note2" style="margin:2px 0 8px">Dotazy na Google jdou po jednom s odstupem <input id="sfgap" inputmode="numeric" value="${esc(settings.freeGap||6)}" style="width:3em"> s, aby nenarazily na minutový limit. Appka nepřepíná na méně přesné „lite“ modely – když dojde limit, raději to řekne. Jedna fotka = asi 4–6 dotazů.${settings.useDay===new Date().toISOString().slice(0,10)?` Dnes odesláno <b>${settings.useN||0}</b> ${plur(settings.useN||0,'dotaz','dotazy','dotazů')}.`:''}</p>
@@ -502,6 +518,14 @@ $('zsplitb').onclick=async()=>{const r=getR(curId),x=rowsOf(r)[zCur];const p=(r.
     if(manual||!zSplit)return;zSplit={i:zCur,rows:sub,ai:true,pick:null};renderSplit();box.scrollIntoView({behavior:'smooth',block:'center'})}
   catch(e){if(manual||!zSplit)return;zSplit.rows.push({p:x.p,c:0,ph:x.ph,box:null});renderSplit();box.insertAdjacentHTML('afterbegin',`<div class="status err">${esc(aiErr(e))} – rozděl ručně.</div>`)}
   finally{b.disabled=false;b.textContent=old}};
+async function doLocal(r,i,quiet){const x=rowsOf(r)[i];if(!x||!x.box){toast('Nejdřív označ řádek na fotce (Označit)',true);return}
+  try{const res=await localCountRow(r,x);const prev=+x.c||0;snap([r]);x.pts=res.pts;x.ga=null;x.gb=null;x.bad=[];
+    if(prev&&prev!==res.c&&x.ai){x.q=1;x.alts=[...new Set([prev,res.c])].sort((a,b)=>a-b);x.note=`AI: ${prev}, telefon: ${res.c}. Zkontroluj tečky.`}
+    else{x.q=res.unsure?1:0;x.alts=null;x.note=res.unsure?'Spočítáno v telefonu – nejisté (víc řádků nebo slité čárky), zkontroluj tečky.':'Spočítáno v telefonu – zkontroluj tečky.'}
+    x.c=res.c;x.local=1;save(r);if(!quiet){renderZoom();offerUndo(`V telefonu: ${res.c} čárek`)}}
+  catch(e){toast(errTxt(e)||'Spočítat se nepovedlo',true);log('CHYBA','v telefonu',errInfo(e))}}
+$('zloc').onclick=()=>{doLocal(getR(curId),zCur)};
+$('aloc').onclick=()=>{const r=getR(curId);$('ai').close();if(rowsOf(r).some(x=>x.box&&(x.ph||0)===curPhoto)){const b=document.querySelector('[data-a=localall]');b&&b.click()}else{settings.readMode='local';saveSettings();render();toast('Bez AI: klepni dole na cenu a na fotce táhni přes její čárky')}};
 $('zdel').onclick=()=>{const r=getR(curId);if(!r)return;const x=rowsOf(r)[zCur];if(!x)return;snap([r]);r.rows=rowsOf(r).filter((_,k)=>k!==zCur);save(r);
   offerUndo(`Řádek ${x.p} Kč × ${x.c} smazán`);const n=rowsOf(r).length;if(!n){$('zoom').close();return}
   const f=flagList(r);if(f.length)openZoom(f.find(i=>i>=zCur)??f[0]);else openZoom(Math.min(zCur,n-1))};
@@ -538,7 +562,7 @@ zimg.addEventListener('pointerup',e=>{if(!drag)return;const {a,b,H}=drag;drag=nu
   if(Math.abs(b[0]-a[0])<.03||Math.abs(b[1]-a[1])<.01){toast('Táhni prstem přes celý řádek.');return}
   const cl=v=>Math.min(1,Math.max(0,v));const r=getR(curId),x=rowsOf(r)[zCur];
   x.box=[cl(Math.min(a[0],b[0])),cl(Math.min(a[1],b[1])/H),cl(Math.max(a[0],b[0])),cl(Math.max(a[1],b[1])/H)];x.ph=x.ph||0;
-  save(r);zMode='row';zLevel=2;renderZoom();toast('Řádek označen – teď počítej čárky');});
+  save(r);zMode='row';zLevel=2;if(!(+x.c>0)){doLocal(r,zCur)}else{renderZoom();toast('Řádek označen – teď počítej čárky')}});
 zimg.addEventListener('click',e=>{const svg=e.target.closest('svg.tap');if(svg){const p=svgPt(svg,e);if(!p)return;
     const hit=tapMarks.findIndex(m=>Math.hypot(m[0]-p[0],m[1]-p[1])<.012);if(hit>=0){tapMarks.splice(hit,1)}else{tapMarks.push([p[0],p[1],tap5?5:1]);tap5=false}
     if(navigator.vibrate)navigator.vibrate(6);const sl=zimg.scrollLeft,st=zimg.scrollTop;renderZoom();zimg.scrollLeft=sl;zimg.scrollTop=st;return}
@@ -553,7 +577,7 @@ async function capMP(blob,mp){try{return await capMP0(blob,mp)}catch(e){return b
 async function capMP0(blob,mp){const img=await imgFromBlob(blob);const px=img.naturalWidth*img.naturalHeight;if(px<=mp)return blob;const s=Math.sqrt(mp/px);
   const c=document.createElement('canvas');c.width=Math.round(img.naturalWidth*s);c.height=Math.round(img.naturalHeight*s);c.getContext('2d').drawImage(img,0,0,c.width,c.height);return await canvasBlob(c,.88)}
 async function aiCall(parts,signal,json){
-  if(claudeAI&&!settings.aiKey){
+  if(claudeAI&&!extAI()){
     const imgs=[];let txt='';let n=0;
     for(const p of parts){if(p.text)txt+=p.text+'\n';else if(p.inline_data){n++;txt+=`[obrázek ${n}]\n`;imgs.push(await capMP(b64ToBlob(p.inline_data.data,p.inline_data.mime_type),1.15e6))}}
     txt+='\nObrázky jsou přiloženy ve stejném pořadí, v jakém jsou v textu značky [obrázek N].';
@@ -561,7 +585,7 @@ async function aiCall(parts,signal,json){
     try{const r=await claudeAI(txt,{images:imgs,modelTier:'default',cache:false,signal});log('INFO','Claude odpověď',{ms:Date.now()-t,znaku:r.text.length,truncated:r.truncated,tier:r.modelTierApplied,zacatek:r.text.slice(0,200)});return r.text}
     catch(e){log('CHYBA','Claude selhal',{ms:Date.now()-t,...errInfo(e),text:e&&e.text?String(e.text).slice(0,200):undefined});if(e&&e.code==='cancelled')throw{name:'AbortError'};if(e&&(e.code==='not_granted'||e.code==='sampling_disabled'))throw{code:'key',msg:'Claude tu není povolený'};if(e&&e.code==='rate_limited')throw{code:429};throw{code:0,msg:e&&e.code==='upstream_error'?'spojení s Claudem se přerušilo. Nech displej rozsvícený a appku v popředí':(e&&(e.code?e.code+': ':'')+(e.message||''))||'neznámá chyba'}}
   }
-  return gQueue(()=>gemini(parts,signal,json),signal);
+  return gQueue(()=>isOAI()?oaiCall(parts,signal,json):geminiKeys(parts,signal,json),signal);
 }
 /* ---------- pravidla pro bezplatný klíč: dotazy po jednom s odstupem, denní počítadlo ---------- */
 const freeOn=()=>settings.freeMode!==false;
@@ -573,14 +597,14 @@ function gQueue(fn,signal){const run=gChain.then(async()=>{
     gLast=Date.now();countUse();return await fn()});
   gChain=freeOn()?run.catch(()=>{}):gChain;return run}
 function countUse(){const d=new Date().toISOString().slice(0,10);if(settings.useDay!==d){settings.useDay=d;settings.useN=0}settings.useN=(settings.useN||0)+1;saveSettings()}
-const maxImgs=()=>claudeAI&&!settings.aiKey?Math.max(2,claudeMax-1):30;
+const maxImgs=()=>claudeAI&&!extAI()?Math.max(2,claudeMax-1):30;
 const GAPI='https://generativelanguage.googleapis.com/v1beta';
 /* fetch na Google: nejdřív s klíčem v hlavičce, při síťové chybě (Safari „Load failed“) znovu s klíčem v adrese */
 async function gfetch(url,opt={}){
-  try{return await fetch(url,{...opt,headers:{...(opt.headers||{}),'x-goog-api-key':settings.aiKey}})}
+  try{return await fetch(url,{...opt,headers:{...(opt.headers||{}),'x-goog-api-key':curKey()}})}
   catch(e){if(e&&e.name==='AbortError')throw e;log('VAROV','Google fetch (hlavička) selhal',errInfo(e));
     const h={...(opt.headers||{})};
-    try{return await fetch(url+(url.includes('?')?'&':'?')+'key='+encodeURIComponent(settings.aiKey),{...opt,headers:h})}
+    try{return await fetch(url+(url.includes('?')?'&':'?')+'key='+encodeURIComponent(curKey()),{...opt,headers:h})}
     catch(e2){if(e2&&e2.name==='AbortError')throw e2;log('CHYBA','Google fetch (key v adrese) selhal',errInfo(e2));
       throw{code:'net',msg:navigator.onLine?'Google spojení odmítl. Nejčastěji je to neplatným nebo nepovoleným klíčem':'Jsi offline'}}}
 }
@@ -602,7 +626,30 @@ async function listModels(){
   log('INFO','Gemini modely',list.slice(0,8));
   return list;
 }
-let aiChunk=null,lastModel=''; /* callback(znaků) pro průběh */
+let aiChunk=null,lastModel='';
+/* víc Gemini klíčů: při denním limitu / limitu 0 / neplatném klíči přepnout na další */
+async function geminiKeys(parts,signal,json){const n=allKeys().length;
+  for(let t=0;;t++){try{return await gemini(parts,signal,json)}catch(e){
+    const quota=e&&e.code===429&&e.quota&&(e.quota.day||e.quota.zero);const bad=e&&e.code==='key';
+    if((quota||bad)&&t<n-1&&(settings.keyIdx||0)<n-1){settings.keyIdx=(settings.keyIdx||0)+1;saveSettings();log('INFO','přepínám na další klíč',{cislo:settings.keyIdx+1,z:n,duvod:quota?'limit':'klíč'});continue}
+    throw e}}}
+/* jiný poskytovatel – OpenAI-kompatibilní rozhraní (chat/completions s obrázkem) */
+async function oaiCall(parts,signal,json){const url=String(settings.oaiUrl||'').replace(/\/+$/,'')+'/chat/completions';
+  const content=parts.map(p=>p.text!=null?{type:'text',text:p.text}:{type:'image_url',image_url:{url:`data:${p.inline_data.mime_type};base64,${p.inline_data.data}`}});
+  const tc=new AbortController();let timedOut=false;const tmo=setTimeout(()=>{timedOut=true;tc.abort()},(+settings.aiTimeout||90)*1000);const onAb=()=>tc.abort();signal&&signal.addEventListener('abort',onAb,{once:true});
+  const send=async rf=>fetch(url,{method:'POST',signal:tc.signal,headers:{'Content-Type':'application/json','Authorization':'Bearer '+settings.oaiKey,'X-Title':'Uctenky'},
+    body:JSON.stringify({model:settings.oaiModel,messages:[{role:'user',content}],temperature:0,...(rf?{response_format:{type:'json_object'}}:{})})});
+  const t0=Date.now();
+  try{let res;try{res=await send(json&&!settings.oaiNoRF)}catch(e){if(timedOut)throw{code:'busy',msg:'Poskytovatel neodpověděl včas'};if(e&&e.name==='AbortError')throw e;
+        throw{code:'net',msg:navigator.onLine?'Spojení s poskytovatelem selhalo (špatná adresa, nebo nepovoluje volání z prohlížeče)':'Jsi offline'}}
+    if(res.status===400&&json&&!settings.oaiNoRF){const tx=await res.clone().text();if(/response_format|json_object/i.test(tx)){settings.oaiNoRF=true;saveSettings();res=await send(false)}}
+    log('INFO','AI '+settings.oaiModel,{status:res.status,ms:Date.now()-t0});
+    if(!res.ok){let msg='';try{const d=await res.json();msg=(d.error&&(d.error.message||d.error))||JSON.stringify(d).slice(0,200)}catch(e){}
+      if(res.status===401||res.status===403)throw{code:'key',msg:String(msg)};if(res.status===429)throw{code:429,msg:String(msg),quota:{min:!/day|daily|den/i.test(msg),day:/day|daily/i.test(msg)}};
+      if(res.status>=500)throw{code:'busy',msg:String(msg)};throw{code:res.status,msg:String(msg)}}
+    const d=await res.json();const m=d.choices&&d.choices[0]&&d.choices[0].message;let t=m?(typeof m.content==='string'?m.content:(m.content||[]).map(c=>c.text||'').join('')):'';
+    if(!t)throw{code:'empty',msg:'poskytovatel vrátil prázdnou odpověď'};aiChunk&&aiChunk(t.length,false);lastModel=settings.oaiModel;return t}
+  finally{clearTimeout(tmo);signal&&signal.removeEventListener('abort',onAb)}} /* callback(znaků) pro průběh */
 function thinkCfg(m){const mr=settings.noMediaRes||settings.readMode!=='exact'?{}:{mediaResolution:'MEDIA_RESOLUTION_HIGH'};if(settings.noThink)return mr;if(/gemini-[3-9]/.test(m))return{...mr,thinkingConfig:{thinkingLevel:settings.readMode!=='exact'&&!settings.noMinimal?'minimal':'low'}};if(/gemini-2\.5-flash/.test(m))return{...mr,thinkingConfig:{thinkingBudget:0}};return mr}
 function thinkCfg_old(m){if(settings.noThink)return{};if(/gemini-[3-9]/.test(m))return{thinkingConfig:{thinkingLevel:'low'}};if(/gemini-2\.5-flash/.test(m))return{thinkingConfig:{thinkingBudget:0}};return{}}
 async function readSSE(res,onChunk){
@@ -646,6 +693,7 @@ async function gemini(parts,signal,json){
     if(st===429){const q=last.quota||{};q429=last;
       /* minutový limit: chvíli počkat a zkusit znovu stejný model */
       if(!q.day&&!q.zero&&(waited[m]||0)<2&&(q.retry||0)<=45){waited[m]=(waited[m]||0)+1;const w=Math.max(5,Math.ceil(q.retry||15));log('INFO','minutový limit – čekám',{s:w,model:m});await pause(w);i--;continue}
+      if((q.day||q.zero)&&(settings.keyIdx||0)<allKeys().length-1)throw last; /* další klíč dřív než další model */
       /* denní limit / bez limitu: zkusit jiné modely (lite mívají vyšší limit) */
       await more(true);continue}
     if(st===404){await more(false);continue}
@@ -660,7 +708,7 @@ const errTxt=e=>e==null?'':typeof e==='string'?e:(e.msg||e.message||(e.code!=nul
 function resetTxt(){try{const now=new Date();const pt=new Date(now.toLocaleString('en-US',{timeZone:'America/Los_Angeles'}));const mid=new Date(pt);mid.setHours(24,0,0,0);const at=new Date(now.getTime()+(mid-pt));const t=at.toLocaleTimeString('cs-CZ',{hour:'2-digit',minute:'2-digit'});return (at.getDate()===now.getDate()?'dnes v ':'zítra v ')+t}catch(e){return 'v 9:00'}}
 const quotaTxt=e=>{const q=e.quota||{};
   if(q.zero)return 'Google tomuto klíči nedává žádný bezplatný limit (limit 0). Vytvoř nový klíč na aistudio.google.com → Get API key → Create API key → „Create API key in new project“ a vlož ho sem. Klíč by měl začínat „AIza“.';
-  if(q.day)return 'Dnešní bezplatný limit Googlu je vyčerpaný (u všech modelů, které klíč smí). Obnoví se '+resetTxt()+'. Do té doby počítej čárky ručně, nebo použij jiný klíč (jiný Google účet).';
+  if(q.day)return 'Dnešní bezplatný limit Googlu je vyčerpaný ('+(allKeys().length>1?'u všech '+allKeys().length+' klíčů':'u všech modelů, které klíč smí')+'). Obnoví se '+resetTxt()+'. Do té doby počítej čárky ručně, nebo použij jiný klíč (jiný Google účet).';
   return 'Google je teď přetížený nebo došel minutový limit. Zkus to za minutu.'+(e.msg?' ('+String(e.msg).slice(0,100)+')':'')};
 const aiErr=e=>e&&e.name==='AbortError'?'Zastaveno.':e&&e.code==='net'?e.msg+(/^AIza/.test(settings.aiKey||'')?'.':'. Klíč Gemini má začínat „AIza“ – vytvoř nový na aistudio.google.com/app/apikey.'):e&&e.code==='key'?'Klíč nefunguje'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'. Zkontroluj ho v Nastavení.':e&&e.code===429?quotaTxt(e):e&&e.code==='busy'?'Google teď odpovídá moc pomalu nebo je přetížený'+(e.msg&&/neodpověděl/.test(e.msg)?' ('+e.msg+')':'')+'. Appka to zkusila znovu i s jiným modelem. Zkus to za pár minut – fotka zůstává uložená.':e&&e.code===404?'Žádný model není pro tento klíč dostupný'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'.':!navigator.onLine?'Jsi offline. Čtení přes AI potřebuje internet.':'Přečíst fotku se nepovedlo: '+(errTxt(e)||'neznámá chyba').slice(0,160)+'. Zkus to znovu.';
 const LAYOUT_PROMPT=`Na fotkách je ručně psaná hospodská účtenka (útrata jednoho člověka). Na začátku řádku je cena v Kč (např. 55, 35, 40, 30, 28, 25, 20, 18, někdy 145 nebo 250), za ní čárky = počet kusů.
@@ -689,7 +737,7 @@ Pokud ve výřezu vidíš na začátku jiného řádku nebo jiné skupiny JINOU 
 NEJDŮLEŽITĚJŠÍ: neodhaduj počet. Projdi výřez zleva doprava a ke KAŽDÉ jednotlivé čárce dej bod do "points" jako [y, x] v rozsahu 0–1000 vzhledem k výřezu (bod přesně na SPODNÍ konec čárky – tam, kde čárka dole končí). Šikmá přeškrtávací čárka plotku je taky jedna čárka = jeden bod na jejím spodním konci (plotek = 5 bodů). Nic nevynechej, nic nepočítej dvakrát. "count" = počet bodů.
 Odpověz POUZE JSONem: {"counts":[{"id":1,"count":13,"points":[[500,120],[510,150]],"groups":[{"x":0.2,"n":5},{"x":0.4,"n":5},{"x":0.58,"n":3}],"bad":[],"uncertain":false,"note":""}]} – id je číslo výřezu.`;
 /* Gemini zná rámečky nativně jako box_2d [ymin,xmin,ymax,xmax] v 0–1000 */
-const G_BOX=()=>!!settings.aiKey;
+const G_BOX=()=>!isOAI()&&!!settings.aiKey;
 function toGbox(p){if(!G_BOX())return p;return p
   .replace(/"box":\[x1,y1,x2,y2\],"price_box":\[x1,y1,x2,y2\],"spot":null/g,'"box_2d":[ymin,xmin,ymax,xmax],"price_box_2d":[ymin,xmin,ymax,xmax],"spot_2d":null').replace(/\(price_box\)/,'(price_box_2d)')
   .replace(/"box":\[0\.02,0\.1,0\.4,0\.35\],"price_box":\[0\.02,0\.1,0\.1,0\.35\]/g,'"box_2d":[100,20,350,400],"price_box_2d":[100,20,350,100]').replace(/"price_box" = rámeček/,'"price_box_2d" = rámeček').replace(/\(stejný formát jako box\)/,'(stejný formát jako box_2d)')
@@ -821,14 +869,14 @@ function offerLearn(r,x,from,to){if(!x.ai||!from||!to||+from===+to)return;const 
     toast(priceList().includes(+from)?`Uložen vzor písma ${to} Kč (${from} je v ceníku, pravidlo nedělám)`:`Zapamatováno: ${from} → ${to}`+(b?' + vzor písma':''))};
   $('learnn').onclick=()=>{el.hidden=true}}
 function hwNote(){const t=(settings.hwNote||'').trim();return t?`\nPOZNÁMKA OBSLUHY K PÍSMU (ber vážně): ${t.slice(0,600)}`:''}
-function hwParts(){if(!settings.aiKey||!hwSamples.length)return[];const ps=[{text:'VZORY PÍSMA tohoto číšníka (jen pro rozpoznání číslic cen, nic z nich nepočítej a nezahrnuj do rows):'}];
+function hwParts(){if(!extAI()||!hwSamples.length)return[];const ps=[{text:'VZORY PÍSMA tohoto číšníka (jen pro rozpoznání číslic cen, nic z nich nepočítej a nezahrnuj do rows):'}];
   const seen={};for(const s of [...hwSamples].reverse()){if((seen[s.price]=(seen[s.price]||0)+1)>2)continue;ps.push({text:`Vzor písma: ${s.price} Kč`+(s.read&&s.read!==s.price?` (dřív chybně čteno jako ${s.read})`:'')});ps.push({inline_data:{mime_type:'image/jpeg',data:s.img}});if(ps.length>25)break}
   return ps}
 async function readPhoto(pid,ph,status,signal){
   const rec=await getOne('photos',pid);if(!rec)throw{code:'empty',msg:'Fotka chybí'};
   status('Připravuji fotku…',0);
-  const {blob}=await shrink(rec.blob,settings.aiKey&&settings.readMode==='exact'?2400:1600,.88);const img=await imgFromBlob(blob);
-  const lim=settings.aiKey?1:claudeAI?claudeMax:4;const strips=lim>=4?[[0,.4],[.3,.7],[.6,1]]:lim>=3?[[0,.55],[.45,1]]:[];
+  const {blob}=await shrink(rec.blob,extAI()&&settings.readMode==='exact'?2400:1600,.88);const img=await imgFromBlob(blob);
+  const lim=extAI()?1:claudeAI?claudeMax:4;const strips=lim>=4?[[0,.4],[.3,.7],[.6,1]]:lim>=3?[[0,.55],[.45,1]]:[];
   const stripTxt=strips.length?'Obrázek 1 je celá fotka. '+strips.map((s,i)=>`Obrázek ${i+2} je výřez celé šířky ve vyšším rozlišení, výška ${String(s[0]).replace('.',',')}–${String(s[1]).replace('.',',')}`).join('; ')+' (zlomky výšky celé fotky). Překryvy nepočítej dvakrát.':'Obrázek 1 je celá fotka.';
   const F=settings.priceFix||[];
   const prompt=toGbox(LAYOUT_PROMPT).replace(/Obrázek 1 je celá fotka\.[^\n]*/,stripTxt)+`\nCENÍK této hospody: ${priceList().join(', ')} Kč. Cena mimo ceník je možná, ale nejspíš špatně přečtená – pak nastav "price_uncertain": true a do "price_alts" dej 1–3 ceny z ceníku, které tak mohou vypadat.`+(F.length?`\nZnámé záměny tohoto písma: ${F.map(f=>f.from+' je ve skutečnosti '+f.to).join('; ')}.`:'')+`\nU každého řádku uveď i "price_uncertain" (true/false) a "price_alts" ([]).`+hwNote();
@@ -838,7 +886,7 @@ async function readPhoto(pid,ph,status,signal){
   log('INFO','čtení: obrázky připraveny',{full:Math.round(blob.size/1024)+'kB',w:img.naturalWidth,h:img.naturalHeight,pruhy:strips.length});
   status('Hledám ceny a čárky…',1);
   let rows=[];
-  if(settings.aiKey){try{rows=await sceneRead(blob,ph,signal)}catch(e){if(e&&e.name==='AbortError')throw e;if(e&&(e.code==='key'||e.code===429||e.code==='busy'))throw e;log('VAROV','čtení ceny+čárky selhalo, zkouším po řádcích',errInfo(e))}}
+  if(extAI()){try{rows=await sceneRead(blob,ph,signal)}catch(e){if(e&&e.name==='AbortError')throw e;if(e&&(e.code==='key'||e.code===429||e.code==='busy'))throw e;log('VAROV','čtení ceny+čárky selhalo, zkouším po řádcích',errInfo(e))}}
   if(!rows.length){
   const raw=await aiCall(parts,signal,true);log('INFO','čtení: odpověď AI (řádky)',String(raw).slice(0,1800));const data=parseJSON(raw);if(data&&!Array.isArray(data.rows))data.rows=rowsOfJSON(data);
   rows=(data&&Array.isArray(data.rows)?data.rows:[]).map(x=>({p:num(x.price),c:num(x.count),q:x.uncertain?1:0,note:String(x.note||'').slice(0,200),
@@ -892,6 +940,51 @@ async function regionRows(fimg,box,ph,signal){const m=.012;const x1=clamp01(box[
   const raw=await aiCall(ps,signal,true);log('INFO','oblast: odpověď AI',String(raw).slice(0,1200));const d=parseJSON(raw);if(d&&!Array.isArray(d.rows))d.rows=rowsOfJSON(d);const mp=b=>[x1+(x2-x1)*clamp01(b[0]),y1+(y2-y1)*clamp01(b[1]),x1+(x2-x1)*clamp01(b[2]),y1+(y2-y1)*clamp01(b[3])].map(v=>+v.toFixed(4));
   const rows=(d&&Array.isArray(d.rows)?d.rows:[]).filter(x=>readBox(x)&&num(x.price)>0).map(x=>({p:num(x.price),c:num(x.count),q:x.uncertain?1:0,note:String(x.note||'').slice(0,200),box:mp(readBox(x)),pbox:readPBox(x)?mp(readPBox(x)):null,spots:[],ph,ai:1,pai:num(x.price),pq:x.price_uncertain?1:0,palts:Array.isArray(x.price_alts)?x.price_alts.map(num).filter(Boolean):[],split:1}));
   rows.sort((a,b)=>(a.box[1]-b.box[1])||(a.box[0]-b.box[0]));log('INFO','oblast: rozděleno',rows.map(x=>[x.p,x.c]));return rows}
+/* ---------- počítání čárek přímo v telefonu (bez AI) ----------
+   výřez řádku → normalizace jasu podle pozadí → maska inkoustu → vodorovné řezy, počet tahů na řezu → medián;
+   u každého tahu se dohledá jeho spodní konec (tečka) */
+async function localCount(img,box,pbox){
+  const W=img.naturalWidth,Hh=img.naturalHeight;let bx0=box[0];
+  if(pbox&&pbox[2]>box[0]&&pbox[2]<box[2]-.02&&Math.min(pbox[3],box[3])-Math.max(pbox[1],box[1])>0)bx0=Math.max(bx0,pbox[2]+.004);
+  const sx=bx0*W,sy=box[1]*Hh,sw=(box[2]-bx0)*W,sh=(box[3]-box[1])*Hh;if(sw<4||sh<4)return{c:0,pts:[]};
+  const s0=Math.min(2,1400/sw,640/sh);const w=Math.max(8,Math.round(sw*s0)),h=Math.max(8,Math.round(sh*s0));const c=document.createElement('canvas');c.width=w;c.height=h;const g=c.getContext('2d',{willReadFrequently:true});
+  g.drawImage(img,sx,sy,sw,sh,0,0,w,h);const d=g.getImageData(0,0,w,h).data;
+  const L=new Float32Array(w*h);for(let i=0;i<w*h;i++)L[i]=.3*d[i*4]+.59*d[i*4+1]+.11*d[i*4+2];
+  /* pozadí: maximum v okně 15×15 (papír) a rozmazání */
+  const mx=(src,horiz,r)=>{const o=new Float32Array(w*h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){let m=0;for(let k=-r;k<=r;k++){const xx=horiz?x+k:x,yy=horiz?y:y+k;if(xx<0||yy<0||xx>=w||yy>=h)continue;const v=src[yy*w+xx];if(v>m)m=v}o[y*w+x]=m}return o};
+  const bl=(src,horiz,r)=>{const o=new Float32Array(w*h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){let s=0,n=0;for(let k=-r;k<=r;k++){const xx=horiz?x+k:x,yy=horiz?y:y+k;if(xx<0||yy<0||xx>=w||yy>=h)continue;s+=src[yy*w+xx];n++}o[y*w+x]=s/n}return o};
+  let bg=mx(mx(L,true,7),false,7);bg=bl(bl(bg,true,8),false,8);
+  const ink=new Uint8Array(w*h);for(let i=0;i<w*h;i++)ink[i]=L[i]/Math.max(1,bg[i])<.78?1:0;
+  const runsAt=y=>{const R=[];let s=-1;for(let x=0;x<w;x++){const v=ink[y*w+x]||(y>0&&ink[(y-1)*w+x])||(y<h-1&&ink[(y+1)*w+x]);if(v&&s<0)s=x;if(!v&&s>=0){R.push([s,x]);s=-1}}if(s>=0)R.push([s,w]);
+    const M=[];for(const r of R){if(M.length&&r[0]-M[M.length-1][1]<2)M[M.length-1][1]=r[1];else M.push(r)}return M};
+  /* souvislé tahy (komponenty) – výška typické čárky; když je výřez vyšší než ~1,7 čárky, je v něm víc řádků */
+  const lab=new Int32Array(w*h);const comps=[];{let id=0;const st=[];for(let i=0;i<w*h;i++){if(!ink[i]||lab[i])continue;id++;let x0=w,x1=0,y0=h,y1=0,n=0;st.push(i);lab[i]=id;
+    while(st.length){const q=st.pop();const qx=q%w,qy=(q-qx)/w;n++;if(qx<x0)x0=qx;if(qx>x1)x1=qx;if(qy<y0)y0=qy;if(qy>y1)y1=qy;
+      for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const nx=qx+dx,ny=qy+dy;if(nx<0||ny<0||nx>=w||ny>=h)continue;const k=ny*w+nx;if(ink[k]&&!lab[k]){lab[k]=id;st.push(k)}}}
+    comps.push({x0,x1,y0,y1,n,id})}}
+  const hs=comps.map(c=>c.y1-c.y0+1).sort((a,b)=>a-b);const H0=hs.length?hs[Math.floor(hs.length*.9)]:h;
+  if(comps.length&&h>H0*1.7){const keep=comps.filter(c=>c.y1-c.y0+1>=H0*.4);const ws=keep.map(c=>c.x1-c.x0+1).sort((a,b)=>a-b);const mw=ws.length?ws[Math.floor(ws.length/3)]:1;
+    let total=0;const pts=[];keep.forEach(c=>{const k=Math.max(1,Math.round((c.x1-c.x0+1)/Math.max(mw*1.6,1)));total+=k;
+      for(let t=0;t<k;t++){const cx=c.x0+(c.x1-c.x0+1)*(t+.5)/k;pts.push([+((sx+cx/w*sw)/W).toFixed(4),+((sy+(c.y1+1)/h*sh)/Hh).toFixed(4)])}});
+    log('INFO','v telefonu: víc řádků – podle tahů',{tahu:keep.length,vysledek:total});return{c:total,pts,unsure:true}}
+  /* pásy (řádky čárek) podle vodorovného profilu inkoustu */
+  const prof=new Float32Array(h);for(let y=0;y<h;y++){let s=0;for(let x=0;x<w;x++)s+=ink[y*w+x];prof[y]=s}
+  const sm=new Float32Array(h);for(let y=0;y<h;y++){let s=0,n=0;for(let k=-3;k<=3;k++)if(y+k>=0&&y+k<h){s+=prof[y+k];n++}sm[y]=s/n}
+  const pmax=Math.max(...sm);let bands=[];let st=-1;for(let y=0;y<=h;y++){const on=y<h&&sm[y]>pmax*.22;if(on&&st<0)st=y;if(!on&&st>=0){bands.push([st,y]);st=-1}}
+  const bigH=Math.max(...bands.map(b=>b[1]-b[0]),1);bands=bands.filter(b=>b[1]-b[0]>=bigH*.35);
+  /* spojit pásy, mezi kterými je jen malá mezera */
+  const B=[];for(const b of bands){const l=B[B.length-1];if(l&&b[0]-l[1]<bigH*.12)l[1]=b[1];else B.push(b.slice())}if(!B.length)B.push([0,h]);
+  let total=0,pts=[],unsure=false;const dbg=[];
+  for(const [b0,b1] of B){const bh=b1-b0;const lines=[];for(let k=0;k<10;k++){const y=Math.round(b0+(.3+k*.05)*bh);if(y>=0&&y<h)lines.push({y,R:runsAt(y)})}
+    if(!lines.length)continue;const counts=lines.map(l=>l.R.length).sort((a,b)=>a-b);const med=counts[Math.floor(counts.length/2)];
+    const best=lines.filter(l=>l.R.length===med).sort((a,b)=>Math.abs(a.y-(b0+bh*.52))-Math.abs(b.y-(b0+bh*.52)))[0]||lines[0];
+    best.R.forEach(r=>{let cx=(r[0]+r[1])/2,y=best.y;const lim=Math.min(h-1,b1+Math.round(bh*.25));for(;y<lim;){let got=0;for(let k=1;k<=4&&y+k<=lim;k++){let s=0,n=0;for(let x=Math.max(0,Math.round(cx)-4);x<=Math.min(w-1,Math.round(cx)+4);x++)if(ink[(y+k)*w+x]){s+=x;n++}if(n){cx=s/n;y+=k;got=1;break}}if(!got)break}
+      pts.push([+((sx+cx/w*sw)/W).toFixed(4),+((sy+y/h*sh)/Hh).toFixed(4)])});
+    total+=med;if(counts[counts.length-2]-counts[1]>2)unsure=true;dbg.push(lines.map(l=>l.R.length))}
+  log('INFO','v telefonu: řezy',{pasy:B.length,pocty:dbg,vysledek:total});
+  return{c:total,pts,unsure:unsure||B.length>1}}
+try{window.uctenkyLocalCount=localCount}catch(e){}
+async function localCountRow(r,x){const p=(r.photos||[])[x.ph||0];if(!p||!x.box)throw{code:'empty',msg:'Řádek není označený na fotce'};const rec=await getOne('photos',p.id);const img=await imgFromBlob(rec.blob);return localCount(img,x.box,x.pbox)}
 /* ---------- kontrola úplnosti: čárky mimo nalezené rámečky ---------- */
 /* nejbližší napsaná cena k rámečku čárek (cena vlevo na stejném řádku má přednost, pak nad) */
 function nearestPrice(b,rows,fallback){const P=[];rows.forEach(r=>{if(r.cover||!r.p)return;const pb=r.pbox||[r.box[0],r.box[1],Math.min(r.box[2],r.box[0]+.06),r.box[3]];if(!P.some(q=>q.v===r.p&&Math.abs(q.box[1]-pb[1])<.005&&Math.abs(q.box[0]-pb[0])<.005))P.push({t:'p',v:r.p,box:pb})});
@@ -960,7 +1053,7 @@ async function runAI(auto){
   const r=getR(curId),p=(r.photos||[])[curPhoto];if(!p)return;
   aiResult=null;$('arep').disabled=$('aadd').disabled=true;$('astop').hidden=false;
   const st=$('ast'),pr=$('aprog');st.className='status';pr.textContent='';renderAIName();$('ai').showModal();
-  aiCtl=new AbortController();$('aretry').hidden=true;
+  aiCtl=new AbortController();$('aretry').hidden=true;$('aloc').hidden=true;
   const t0=Date.now();let stage='',step=0,stepT=Date.now(),chars=0,thinking=false;
   const STEPS=['Příprava fotky','Hledání řádků a cen','Přepočet každého řádku','Hotovo'];const SPAN=[[0,6,3],[6,55,35],[55,96,30],[100,100,1]];
   const prog=$('aprogress');prog.hidden=false;
@@ -979,7 +1072,7 @@ async function runAI(auto){
     pr.textContent=rows.map(x=>`${x.p} Kč × ${x.c}${x.q?'  ⚠ '+x.note:''}`).join('\n');
     $('arep').disabled=$('aadd').disabled=false;
     if(auto&&!rowsOf(r).some(x=>(x.ph||0)===curPhoto)){setTimeout(()=>applyAI(true,true),500)}
-  }catch(e){clearInterval(tick);prog.hidden=true;log('CHYBA','čtení selhalo ve fázi: '+stage,errInfo(e));st.className='status err';st.textContent=aiErr(e)+(stage?` [fáze: ${stage}]`:'');$('aretry').hidden=false;if(e&&e.name!=='AbortError'&&!navigator.onLine){r.pendingAI=true;save(r);st.textContent+=' Přečtu ji sám, až bude internet.'}}
+  }catch(e){clearInterval(tick);prog.hidden=true;log('CHYBA','čtení selhalo ve fázi: '+stage,errInfo(e));if(e&&e.name!=='AbortError'){$('aloc').hidden=false;$('aloc').textContent=rowsOf(r).some(x=>x.box&&(x.ph||0)===curPhoto)?'📱 Spočítat v telefonu':'📱 Počítat bez AI (označím řádky prstem)'}st.className='status err';st.textContent=aiErr(e)+(stage?` [fáze: ${stage}]`:'');$('aretry').hidden=false;if(e&&e.name!=='AbortError'&&!navigator.onLine){r.pendingAI=true;save(r);st.textContent+=' Přečtu ji sám, až bude internet.'}}
   finally{$('astop').hidden=true;aiCtl=null;aiChunk=null}
 }
 function renderAIName(){const r=getR(curId);const box=$('aname');if(!r||!box)return;
@@ -1298,7 +1391,10 @@ app.addEventListener('change',async e=>{
   if(t.id==='camq'||t.id==='galq'){const fs=[...t.files];t.value='';if(!fs.length)return;await quickCapture(fs[0]);return}
   const r=getR(curId);
   if(t.dataset.up){const fs=[...t.files];t.value='';if(fs.length)await addPhotos(fs);return}
-  if(t.id==='srm'){settings.readMode=t.value;saveSettings();toast(t.value==='exact'?'Důkladné čtení':'Rychlé čtení');return}
+  if(t.id==='sprov'){settings.provider=t.value;saveSettings();render();return}
+  if(t.id==='soprs'){if(t.value)$('sourl').value=t.value;return}
+  if(t.id==='sk2'){settings.aiKeys2=t.value.trim();settings.keyIdx=0;saveSettings();toast('Záložní klíče uloženy ('+(allKeys().length-1)+')');render();return}
+  if(t.id==='srm'){settings.readMode=t.value;saveSettings();toast(t.value==='exact'?'Důkladné čtení':t.value==='local'?'Počítání v telefonu bez AI':'Rychlé čtení');render();return}
   if(t.id==='sfree'){settings.freeMode=t.checked;saveSettings();toast(t.checked?'Pravidla pro bezplatný klíč zapnuta':'Pravidla vypnuta – dotazy jdou souběžně');render();return}
   if(t.id==='sfgap'){settings.freeGap=Math.min(30,Math.max(1,num(t.value)||6));saveSettings();toast('Odstup '+settings.freeGap+' s');return}
   if(t.id==='shw'){settings.hwNote=t.value;saveSettings();toast('Poznámka k písmu uložena');return}
@@ -1335,6 +1431,8 @@ app.addEventListener('click',e=>{
   if(a==='delr'){ask('Smazat účtenku?',`Účtenka „${r.name||'Bez jména'}“ ${kc(totR(r)[1])} i její fotky se smažou natrvalo.`,'Ano, smazat',async()=>{receipts=receipts.filter(x=>x.id!==r.id);try{await tx('receipts','readwrite',s=>s.delete(r.id))}catch(e){}for(const p of r.photos||[])await delPhotoData(p.id);view='list';render();toast('Účtenka smazána')});return}
   if(a==='delphoto'){ask('Smazat fotku?','Fotka se smaže natrvalo. Řádky zůstanou, jen bez vyznačení na fotce.','Smazat',async()=>{const p=r.photos[curPhoto];r.photos=r.photos.filter((_,i)=>i!==curPhoto);r.rows=rowsOf(r).map(x=>{if((x.ph||0)===curPhoto)return{...x,box:null,spots:[]};if((x.ph||0)>curPhoto)return{...x,ph:x.ph-1};return x});if(p)await delPhotoData(p.id);curPhoto=0;save(r);render()});return}
   if(a==='reboot'){reboot();return}
+  if(a==='localall'){const r=getR(curId);const idx=rowsOf(r).map((x,i)=>i).filter(i=>{const x=rowsOf(r)[i];return x.box&&(x.ph||0)===curPhoto});toast(`Počítám ${idx.length} ${plur(idx.length,'řádek','řádky','řádků')} v telefonu…`);
+    (async()=>{for(const i of idx)await doLocal(r,i,true);render();const f=rowsOf(r).filter(x=>x.q).length;toast(`Hotovo v telefonu. Ke kontrole: ${f}`)})();return}
   if(a==='addfix'){const f=num($('fxf').value),t=num($('fxt').value);if(!f||!t||f===t){toast('Vyplň obě ceny',true);return}settings.priceFix=[...(settings.priceFix||[]).filter(x=>+x.from!==f),{from:f,to:t}];saveSettings();toast(`Pravidlo ${f} → ${t} přidáno`);render();return}
   if(a==='delfix'){settings.priceFix=(settings.priceFix||[]).filter((_,k)=>k!==+b.dataset.k);saveSettings();render();return}
   if(a==='delhw'){hwSamples=hwSamples.filter(s=>s.id!==b.dataset.k);saveHw();render();return}
@@ -1366,6 +1464,10 @@ app.addEventListener('click',e=>{
   if(a==='manual'){newReceipt();return}
   if(a==='savekey'){settings.aiKey=$('sk').value.trim();settings.aiModel=$('sm').value.trim();saveSettings().then(()=>{toast(settings.aiKey?'Klíč uložen':'Klíč smazán');render()});return}
   if(a==='delkey'){settings.aiKey='';saveSettings().then(()=>render());return}
+  if(a==='saveoai'||a==='testoai'){settings.oaiUrl=$('sourl').value.trim();settings.oaiKey=$('sokey').value.trim();settings.oaiModel=$('somod').value.trim();settings.oaiNoRF=false;saveSettings();
+    if(a==='saveoai'){toast('Uloženo');render();return}
+    const k=$('ost');if(!extAI()){k.className='status err';k.textContent='Vyplň adresu, klíč i model.';return}k.className='status';k.textContent='Zkouším…';
+    oaiCall([{text:'Odpověz jen slovem OK.'}],undefined,false).then(t=>{k.className='status ok';k.textContent='Funguje ✓ ('+settings.oaiModel+')'},e=>{k.className='status err';k.textContent='Test selhal: '+(aiErr(e)||'').replace('Přečíst fotku se nepovedlo: ','')});return}
   if(a==='testkey'){const k=$('kst');settings.aiKey=$('sk').value.trim();settings.aiModel=$('sm').value.trim();if(!settings.aiKey){k.className='status err';k.textContent='Nejdřív vlož klíč.';return}
     saveSettings();
     k.className='status';k.textContent='Zjišťuji dostupné modely…';const userModel=settings.aiModel;listModels().then(l=>{if(!userModel&&l.length)settings.aiModel=l[0];k.textContent='Zkouším model '+(settings.aiModel||DEF_MODELS[0])+'…';return gemini([{text:'Odpověz jen slovem OK.'}],undefined,false)}).then(t=>{saveSettings();k.className='status ok';k.textContent='Klíč funguje ✓ (model: '+(lastModel||settings.aiModel)+(lastModel&&lastModel!==settings.aiModel?' – hlavní model '+settings.aiModel+' má dnes vyčerpaný limit':'')+')'},e=>{k.className='status err';k.textContent=aiErr(e).replace('Přečíst fotku se nepovedlo','Test klíče selhal')});return}
