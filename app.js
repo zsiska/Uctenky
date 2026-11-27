@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=38;
+const APP_VER=39;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -158,7 +158,8 @@ function svgPhoto(r,pi,vb,mode,selIdx,extra){
   const rect=(b,cls,i)=>`<rect class="${cls}" ${i!=null?`data-i="${i}"`:''} x="${b[0]}" y="${b[1]*H}" width="${Math.max(0,b[2]-b[0])}" height="${Math.max(0,(b[3]-b[1])*H)}" rx=".006"/>`;
   let inner='';
   rowsOf(r).forEach((x,i)=>{if(!x.box||(x.ph||0)!==pi)return;
-    if(mode==='all'||(mode==='one'&&i===selIdx)){inner+=rect(x.box,'b'+(x.q?' q':'')+(i===selIdx?' sel':''),mode==='all'?i:null);if(mode==='all')inner+=`<text x="${x.box[0]+.006}" y="${x.box[1]*H+.032}">${esc(x.p)}</text>`}
+    if(mode==='all'||(mode==='one'&&i===selIdx)){inner+=rect(x.box,'b'+(x.q?' q':'')+(i===selIdx?' sel':''),mode==='all'?i:null);if(mode==='all'){if(x.pbox)inner+=rect(x.pbox,'pb');const lbl=`${x.p} × ${x.c} = ${(x.p*x.c).toLocaleString('cs-CZ')} Kč`;const fs=Math.max(.022,Math.min(.036,(x.box[3]-x.box[1])*H*.42));const tw=lbl.length*fs*.56+.014;
+        const lx=Math.min(x.box[0]+.004,1-tw-.004),ly=x.box[1]*H+.004;inner+=`<g class="lbl${x.q?' q':''}"><rect x="${lx}" y="${ly}" width="${tw}" height="${fs*1.3}" rx="${fs*.25}"/><text x="${lx+.007}" y="${ly+fs*.98}" style="font-size:${fs}px">${esc(lbl)}</text></g>`}}
     if(i===selIdx)(x.spots||[]).forEach(s=>inner+=rect(s,'s'));
     if(i===selIdx&&x.pbox)inner+=rect(x.pbox,'pb');
     if(i===selIdx&&mode==='one'&&x.box&&(x.ga||x.bad)){const bh=(x.box[3]-x.box[1])*H,ty=x.box[1]*H,by=x.box[3]*H,fs=Math.max(.016,Math.min(.034,bh*.3));
@@ -743,19 +744,35 @@ function readingOrder(items){const it=items.filter(o=>o.box).map(o=>({...o,cy:(o
     if(L){const ov=Math.max(0,Math.min(L.y2,o.box[3])-Math.max(L.y1,o.box[1]))/Math.max(1e-6,Math.min(L.y2-L.y1,o.h));if(ov>.35||Math.abs(o.cy-L.cy)<Math.min(L.y2-L.y1,o.h)*.45){L.items.push(o);L.y1=Math.min(L.y1,o.box[1]);L.y2=Math.max(L.y2,o.box[3]);L.cy=(L.y1+L.y2)/2;continue}}
     lines.push({items:[o],y1:o.box[1],y2:o.box[3],cy:o.cy})}
   lines.forEach((L,k)=>L.items.sort((a,b)=>a.box[0]-b.box[0]).forEach(o=>o.line=k));return lines.flatMap(L=>L.items)}
-function assignGroups(prices,groups,ph){const P=prices.filter(p=>p.box&&p.v>0);if(!P.length)return[];
-  const seq=readingOrder([...P.map(p=>({...p,t:'p'})),...groups.filter(g=>g.box&&g.c>0).map(g=>({...g,t:'g'}))]);
-  let cur=null;const out=[];const pending=[];
-  for(const o of seq){if(o.t==='p'){cur=o;cur.n=0;continue}
-    const row={p:cur?cur.v:0,c:o.c,q:o.q||(cur&&cur.q)?1:0,note:o.note||'',box:o.box,pbox:cur?cur.box:null,spots:[],ph,ai:1,pai:cur?cur.v:0,pq:cur&&cur.q?1:0,palts:cur?[...(cur.alts||[])]:[],nopr:1,lc:o.c,_pr:cur};
-    if(!cur){pending.push(row)}else cur.n++;out.push(row)}
-  /* čárky před první cenou → k první ceně, ke kontrole */
-  const first=seq.find(o=>o.t==='p');pending.forEach(r=>{r.p=first.v;r.pai=first.v;r.pbox=first.box;r._pr=first;r.q=1;r.note=(r.note?r.note+' · ':'')+`Čárky jsou před první cenou – přiřazeno k ${first.v} Kč, zkontroluj.`});
-  /* cena, za kterou už žádné čárky nejsou (např. napsaná až pod čárkami): převezme těsně předchozí skupinu, ke kontrole */
-  seq.forEach((o,k)=>{if(o.t!=='p'||o.n)return;const prev=out.filter(r=>r._pr!==o&&r.box[3]<=o.box[3]+.01).filter(r=>{const gy=o.box[1]-r.box[3];const gx=Math.max(0,o.box[0]-r.box[2],r.box[0]-o.box[2]);return gy<.08&&gx<.08}).pop();
-    if(prev){const old=prev.p;prev._pr.n--;prev.p=o.v;prev.pai=o.v;prev.pbox=o.box;prev._pr=o;o.n=1;prev.q=1;prev.palts=[old,...prev.palts.filter(v=>v!==old&&v!==o.v)];prev.note=(prev.note?prev.note+' · ':'')+`Cena ${o.v} je napsaná pod čárkami a nic za ní není – čárky přiřazeny k ${o.v} (jinak by patřily k ${old}). Zkontroluj.`}
-    else log('INFO','čtení: cena bez čárek',o.v)});
-  out.forEach(r=>delete r._pr);return out}
+/* Přiřazení čárek k ceně:
+   1) cena vlevo na STEJNÉM řádku (nejmenší svislá vzdálenost středů; při dvou cenách na řádku ta nejbližší zleva)
+   2) řádek čárek bez vlastní ceny (daleko od všech cen) = pokračování → POSLEDNÍ cena nad ním
+   Skupiny patřící ke stejné napsané ceně se sečtou do jednoho řádku. */
+function assignGroups(prices,groups,ph){const P=prices.filter(p=>p.box&&p.v>0).map((p,k)=>({...p,k,cx:(p.box[0]+p.box[2])/2,cy:(p.box[1]+p.box[3])/2}));if(!P.length)return[];
+  const ys=P.map(p=>p.cy).sort((a,b)=>a-b);const gaps=ys.slice(1).map((y,i)=>y-ys[i]).filter(d=>d>.01).sort((a,b)=>a-b);
+  const ph0=P.map(p=>p.box[3]-p.box[1]).sort((a,b)=>a-b)[Math.floor(P.length/2)];
+  const sp=Math.min(gaps.length?gaps[Math.floor(gaps.length/2)]:1,Math.max(.03,ph0*1.8)); /* výška jednoho řádku */
+  const A=[];
+  for(const g of groups.filter(g=>g.box&&g.c>0)){const gcy=(g.box[1]+g.box[3])/2;
+    let C=P.filter(p=>p.cx<g.box[0]+.05);if(!C.length)C=P;
+    const dy=p=>Math.abs(p.cy-gcy);const best=Math.min(...C.map(dy));let note='',q=g.q?1:0,pr,cont=false;
+    if(best>sp*.65){/* řádek bez vlastní ceny → poslední cena před ním v pořadí čtení */
+      const top=P.filter(p=>p.cy<gcy);
+      if(top.length){const lastY=Math.max(...top.map(p=>p.cy));pr=top.filter(p=>p.cy>lastY-sp*.3).sort((a,b)=>b.cx-a.cx)[0];cont=true;note=`Pokračování bez ceny → ${pr.v} Kč (poslední cena před ním).`}
+      else{pr=C.slice().sort((a,b)=>dy(a)-dy(b))[0];q=1;note=`Čárky jsou nad první cenou – přiřazeno k ${pr.v} Kč, zkontroluj.`}}
+    else{const same=C.filter(p=>dy(p)<=best+sp*.3);pr=same.sort((a,b)=>b.cx-a.cx)[0];
+      const second=C.filter(p=>p!==pr&&Math.abs(dy(p)-dy(pr))<sp*.15&&Math.abs(p.cx-pr.cx)<.05)[0];if(second){q=1;note=`Čárky jsou mezi cenami ${pr.v} a ${second.v} – zkontroluj.`}}
+    A.push({g,pr,note,q,cont})}
+  /* cena, za kterou nic není (napsaná až pod čárkami) → převezme pokračování těsně nad ní */
+  P.filter(p=>!A.some(a=>a.pr===p)).forEach(p=>{const cand=A.filter(a=>a.cont&&a.g.box[3]<=p.box[1]+sp*.3&&p.box[1]-a.g.box[3]<sp*1.5&&a.g.box[0]<p.box[2]+.15).sort((a,b)=>b.g.box[3]-a.g.box[3])[0];
+    if(cand){const old=cand.pr.v;cand.pr=p;cand.cont=false;cand.q=1;cand.note=`Cena ${p.v} je napsaná pod čárkami – přiřazeno k ${p.v} (podle pořadí čtení by patřily k ${old}). Zkontroluj.`;cand.alt=old}
+    else log('INFO','čtení: cena bez čárek',p.v)});
+  const byPrice=new Map(),out=[];
+  for(const a of A){const g=a.g,pr=a.pr;
+    if(byPrice.has(pr.k)){const r=byPrice.get(pr.k);r.c+=g.c;r.lc+=g.c;r.box=[Math.min(r.box[0],g.box[0]),Math.min(r.box[1],g.box[1]),Math.max(r.box[2],g.box[2]),Math.max(r.box[3],g.box[3])];r.q=r.q||a.q;if(a.note)r.note=(r.note?r.note+' · ':'')+a.note;continue}
+    const r={p:pr.v,c:g.c,q:a.q||pr.q?1:0,note:[a.note,g.note].filter(Boolean).join(' · '),box:g.box.slice(),pbox:pr.box,spots:[],ph,ai:1,pai:pr.v,pq:pr.q?1:0,palts:[...(a.alt?[a.alt]:[]),...(pr.alts||[])],nopr:1,lc:g.c};
+    byPrice.set(pr.k,r);out.push(r)}
+  return out.sort((a,b)=>(a.pbox[1]-b.pbox[1])||(a.pbox[0]-b.pbox[0]))}
 async function sceneRead(blob,ph,signal){const parts=[{text:SCENE_PROMPT()},{inline_data:{mime_type:'image/jpeg',data:await b64(blob)}},...hwParts()];
   const raw=await aiCall(parts,signal,true);log('INFO','čtení: odpověď AI (ceny+čárky)',String(raw).slice(0,2000));const d=parseJSON(raw)||{};
   const L=priceList();
