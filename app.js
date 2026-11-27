@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=39;
+const APP_VER=40;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -158,8 +158,8 @@ function svgPhoto(r,pi,vb,mode,selIdx,extra){
   const rect=(b,cls,i)=>`<rect class="${cls}" ${i!=null?`data-i="${i}"`:''} x="${b[0]}" y="${b[1]*H}" width="${Math.max(0,b[2]-b[0])}" height="${Math.max(0,(b[3]-b[1])*H)}" rx=".006"/>`;
   let inner='';
   rowsOf(r).forEach((x,i)=>{if(!x.box||(x.ph||0)!==pi)return;
-    if(mode==='all'||(mode==='one'&&i===selIdx)){inner+=rect(x.box,'b'+(x.q?' q':'')+(i===selIdx?' sel':''),mode==='all'?i:null);if(mode==='all'){if(x.pbox)inner+=rect(x.pbox,'pb');const lbl=`${x.p} × ${x.c} = ${(x.p*x.c).toLocaleString('cs-CZ')} Kč`;const fs=Math.max(.022,Math.min(.036,(x.box[3]-x.box[1])*H*.42));const tw=lbl.length*fs*.56+.014;
-        const lx=Math.min(x.box[0]+.004,1-tw-.004),ly=x.box[1]*H+.004;inner+=`<g class="lbl${x.q?' q':''}"><rect x="${lx}" y="${ly}" width="${tw}" height="${fs*1.3}" rx="${fs*.25}"/><text x="${lx+.007}" y="${ly+fs*.98}" style="font-size:${fs}px">${esc(lbl)}</text></g>`}}
+    if(mode==='all'||(mode==='one'&&i===selIdx)){inner+=rect(x.box,'b'+(x.q?' q':'')+(i===selIdx?' sel':''),mode==='all'?i:null);if(mode==='all'){if(x.pbox)inner+=rect(x.pbox,'pb');const lbl=`${x.p} × ${x.c} = ${(x.p*x.c).toLocaleString('cs-CZ')} Kč`;const fs=Math.max(.014,Math.min(.021,(x.box[3]-x.box[1])*H*.28));const tw=lbl.length*fs*.56+.01;
+        const lx=Math.min(x.box[0]+.004,1-tw-.004),ly=x.box[1]*H+.004;inner+=`<g class="lbl${x.q?' q':''}"><rect x="${lx}" y="${ly}" width="${tw}" height="${fs*1.3}" rx="${fs*.25}"/><text x="${lx+.005}" y="${ly+fs*.98}" style="font-size:${fs}px">${esc(lbl)}</text></g>`}}
     if(i===selIdx)(x.spots||[]).forEach(s=>inner+=rect(s,'s'));
     if(i===selIdx&&x.pbox)inner+=rect(x.pbox,'pb');
     if(i===selIdx&&mode==='one'&&x.box&&(x.ga||x.bad)){const bh=(x.box[3]-x.box[1])*H,ty=x.box[1]*H,by=x.box[3]*H,fs=Math.max(.016,Math.min(.034,bh*.3));
@@ -756,7 +756,8 @@ function assignGroups(prices,groups,ph){const P=prices.filter(p=>p.box&&p.v>0).m
   for(const g of groups.filter(g=>g.box&&g.c>0)){const gcy=(g.box[1]+g.box[3])/2;
     let C=P.filter(p=>p.cx<g.box[0]+.05);if(!C.length)C=P;
     const dy=p=>Math.abs(p.cy-gcy);const best=Math.min(...C.map(dy));let note='',q=g.q?1:0,pr,cont=false;
-    if(best>sp*.65){/* řádek bez vlastní ceny → poslední cena před ním v pořadí čtení */
+    const ovl=C.some(p=>Math.min(p.box[3],g.box[3])-Math.max(p.box[1],g.box[1])>(p.box[3]-p.box[1])*.5);
+    if(best>sp*.65&&!ovl){/* řádek bez vlastní ceny → poslední cena před ním v pořadí čtení */
       const top=P.filter(p=>p.cy<gcy);
       if(top.length){const lastY=Math.max(...top.map(p=>p.cy));pr=top.filter(p=>p.cy>lastY-sp*.3).sort((a,b)=>b.cx-a.cx)[0];cont=true;note=`Pokračování bez ceny → ${pr.v} Kč (poslední cena před ním).`}
       else{pr=C.slice().sort((a,b)=>dy(a)-dy(b))[0];q=1;note=`Čárky jsou nad první cenou – přiřazeno k ${pr.v} Kč, zkontroluj.`}}
