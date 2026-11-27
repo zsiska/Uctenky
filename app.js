@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=44;
+const APP_VER=45;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -619,19 +619,20 @@ async function gemini(parts,signal,json){
   const more=async lite=>{if(listed)return;listed=true;try{const l=await listModels();let rest=l.filter(x=>!models.includes(x)&&!/tts|image|embed|live|audio|veo|imagen/i.test(x));if(freeOn()){rest=rest.filter(x=>!/lite|pro|ultra|thinking|deep/i.test(x));rest.sort((a,b)=>(/2\.5-flash$/.test(b)?1:0)-(/2\.5-flash$/.test(a)?1:0));lite=false}if(lite)rest.sort((a,b)=>(/lite/.test(b)?1:0)-(/lite/.test(a)?1:0));models.push(...rest.slice(0,5))}catch(e){if(e.code==='key')throw e}};
   for(let i=0;i<models.length;i++){const m=models[i];const t0=Date.now();
     const stream=!!(window.ReadableStream&&TextDecoder);const cb=aiChunk;
-    const tc=new AbortController();let timedOut=false;const tmo=setTimeout(()=>{timedOut=true;tc.abort()},(+settings.aiTimeout||40)*1000);const onAb=()=>tc.abort();signal&&signal.addEventListener('abort',onAb,{once:true});
+    const tc=new AbortController();let timedOut=false;let tmo=setTimeout(()=>{timedOut=true;tc.abort()},(+settings.aiTimeout||60)*1000);/* do 1. odpovědi max 60 s; když data tečou, utnout až po 25 s ticha */
+    const kick=()=>{clearTimeout(tmo);tmo=setTimeout(()=>{timedOut=true;tc.abort()},25000)};const onAb=()=>tc.abort();signal&&signal.addEventListener('abort',onAb,{once:true});
     let res;try{res=await gfetch(`${GAPI}/models/${encodeURIComponent(m)}:${stream?'streamGenerateContent?alt=sse':'generateContent'}`,{method:'POST',signal:tc.signal,headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0,...thinkCfg(m),...(json?{responseMimeType:'application/json'}:{})}})})}
     catch(e){if(!timedOut){clearTimeout(tmo);throw e}res=null}
     const done=()=>{clearTimeout(tmo);signal&&signal.removeEventListener('abort',onAb)};
-    if(!res){done();last={code:504,msg:`Google neodpověděl do ${+settings.aiTimeout||40} s`};log('CHYBA','Gemini '+m,last);busy={code:'busy',msg:last.msg};const n=waited[m]||0;if(n<1){waited[m]=n+1;i--;continue}await more(false);continue}
+    if(!res){done();last={code:504,msg:`Google neodpověděl včas`};log('CHYBA','Gemini '+m,last);busy={code:'busy',msg:last.msg};const n=waited[m]||0;if(n<1){waited[m]=n+1;i--;continue}await more(false);continue}
     log('INFO','Gemini '+m,{status:res.status,stream});
     let st=res.status;
     if(res.ok){let t='';try{
-      if(stream&&res.body){t=await readSSE(res,cb)}else{const d=await res.json();t=(d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('')}
+      if(stream&&res.body){kick();t=await readSSE(res,(n,th)=>{kick();cb&&cb(n,th)})}else{const d=await res.json();t=(d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('')}
       log('INFO','Gemini odpověď',{ms:Date.now()-t0,znaku:t.length});
       if(!t)throw{code:'empty',msg:'model vrátil prázdnou odpověď'};if(settings.aiModel!==m&&!q429){settings.aiModel=m;saveSettings()}done();lastModel=m;if(q429||busy)log('INFO','obejito jiným pokusem/modelem',m);return t
-      }catch(e){done();if(timedOut){e={code:504,msg:`Google neodpověděl do ${+settings.aiTimeout||40} s`}}else if(e&&(e.name==='AbortError'||e.code==='empty'))throw e;st=typeof e.code==='number'?e.code:503;last={code:st,msg:errTxt(e)};log('CHYBA','Gemini '+m+' (během odpovědi)',last)}}
+      }catch(e){done();if(timedOut){e={code:504,msg:`Google neodpověděl včas`}}else if(e&&(e.name==='AbortError'||e.code==='empty'))throw e;st=typeof e.code==='number'?e.code:503;last={code:st,msg:errTxt(e)};log('CHYBA','Gemini '+m+' (během odpovědi)',last)}}
     else{done();last=await gErr(res);log('CHYBA','Gemini '+m,last)}
     if(st>=500||/high demand|overloaded|UNAVAILABLE|try again later/i.test(last.msg||'')){busy={code:'busy',msg:last.msg};
       /* přetížený model: 2× počkat a zkusit znovu, pak jiný model */
