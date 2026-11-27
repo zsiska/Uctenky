@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=43;
+const APP_VER=44;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -162,6 +162,7 @@ function svgPhoto(r,pi,vb,mode,selIdx,extra){
         const lx=Math.min(x.box[0]+.004,1-tw-.004),ly=x.box[1]*H+.004;inner+=`<g class="lbl${x.q?' q':''}"><rect x="${lx}" y="${ly}" width="${tw}" height="${fs*1.3}" rx="${fs*.25}"/><text x="${lx+.005}" y="${ly+fs*.98}" style="font-size:${fs}px">${esc(lbl)}</text></g>`}}
     if(i===selIdx)(x.spots||[]).forEach(s=>inner+=rect(s,'s'));
     if(i===selIdx&&x.pbox)inner+=rect(x.pbox,'pb');
+    if(i===selIdx&&mode==='one'&&x.pts&&x.pts.length){const R=Math.max(.0035,Math.min(.007,(x.box[3]-x.box[1])*H*.05));x.pts.forEach((p,k)=>{inner+=`<circle class="pt" cx="${p[0]}" cy="${p[1]*H}" r="${R}"/>`+((k+1)%5===0||k===x.pts.length-1?`<text class="ptn" x="${p[0]}" y="${p[1]*H+R*4.2}" style="font-size:${R*3}px">${k+1}</text>`:'')})}
     if(i===selIdx&&mode==='one'&&x.box&&(x.ga||x.bad)){const bh=(x.box[3]-x.box[1])*H,ty=x.box[1]*H,by=x.box[3]*H,fs=Math.max(.016,Math.min(.034,bh*.3));
       const diff=seeDiff(x);
       (x.ga||[]).forEach((g,k)=>{inner+=`<g class="gA${diff.a.has(k)?' dif':''}"><line x1="${g[0]}" y1="${ty}" x2="${g[0]}" y2="${by}"/><rect x="${g[0]-fs*.62}" y="${ty-fs*1.25}" width="${fs*1.24}" height="${fs*1.15}" rx="${fs*.25}"/><text x="${g[0]}" y="${ty-fs*.67}" style="font-size:${fs*.85}px">${g[1]}</text></g>`});
@@ -510,7 +511,7 @@ $('zre').onclick=async()=>{const r=getR(curId),x=rowsOf(r)[zCur];const b=$('zre'
 $('zoom').addEventListener('close',()=>render());
 $('zoom').addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b)return;const r=getR(curId),x=rowsOf(r)[zCur];
-  if(b.dataset.z){zMode=b.dataset.z;if(zMode==='tap'){tapMarks=[];tap5=false}renderZoom();return}
+  if(b.dataset.z){zMode=b.dataset.z;if(zMode==='tap'){const x0=rowsOf(getR(curId))[zCur];const p0=(getR(curId).photos||[])[x0.ph||0]||{};const H0=(p0.h&&p0.w)?p0.h/p0.w:1.4;tapMarks=x0&&x0.pts?x0.pts.map(p=>[p[0],p[1]*H0,1]):[];tap5=false;if(tapMarks.length)toast('Body AI jsou předvyplněné – klepnutím na bod ho odebereš, jinam přidáš')}renderZoom();return}
   if(b.dataset.zoom){zLevel=Math.min(4,Math.max(1,zLevel+(b.dataset.zoom==='+'?1:-1)));if(zMode==='mark')zMode=x.box?'row':'all';renderZoom();return}
   if(b.id==='zpe'){zPrice=!zPrice;renderZoom();return}
   if(b.dataset.zp){let v=b.dataset.zp;if(v==='jina'){v=prompt('Správná cena v Kč',x.p);if(v==null)return}v=num(v);if(!v)return;
@@ -683,7 +684,8 @@ Postupuj zleva doprava a počítej po skupinách, pečlivě, čárku po čárce.
 Ke každému výřezu vrať i SKUPINY, jak jsi je počítal zleva doprava: "groups":[{"x":0.21,"n":5},…] – x je vodorovný střed skupiny jako zlomek šířky výřezu (0 = levý okraj, 1 = pravý), n = počet čárek ve skupině (plný plotek = 5). Součet n musí být count.
 Nejasná místa dej do "bad":[{"x":0.62,"why":"krátce česky, např. dvě čárky splývají"}].
 Pokud ve výřezu vidíš na začátku jiného řádku nebo jiné skupiny JINOU napsanou cenu než vyznačenou (výřez zabírá víc položek), vypiš ji do "other_prices":[18,35] a počítej jen čárky k vyznačené ceně.
-Odpověz POUZE JSONem: {"counts":[{"id":1,"count":13,"groups":[{"x":0.2,"n":5},{"x":0.4,"n":5},{"x":0.58,"n":3}],"bad":[],"uncertain":false,"note":""}]} – id je číslo výřezu.`;
+NEJDŮLEŽITĚJŠÍ: neodhaduj počet. Projdi výřez zleva doprava a ke KAŽDÉ jednotlivé čárce dej bod do "points" jako [y, x] v rozsahu 0–1000 vzhledem k výřezu (bod přesně na SPODNÍ konec čárky – tam, kde čárka dole končí). Šikmá přeškrtávací čárka plotku je taky jedna čárka = jeden bod na jejím spodním konci (plotek = 5 bodů). Nic nevynechej, nic nepočítej dvakrát. "count" = počet bodů.
+Odpověz POUZE JSONem: {"counts":[{"id":1,"count":13,"points":[[500,120],[510,150]],"groups":[{"x":0.2,"n":5},{"x":0.4,"n":5},{"x":0.58,"n":3}],"bad":[],"uncertain":false,"note":""}]} – id je číslo výřezu.`;
 /* Gemini zná rámečky nativně jako box_2d [ymin,xmin,ymax,xmax] v 0–1000 */
 const G_BOX=()=>!!settings.aiKey;
 function toGbox(p){if(!G_BOX())return p;return p
@@ -714,10 +716,17 @@ async function countPass(rows,crops,order,signal){
     const mx=v=>{if(!bx)return null;const x1=clamp01(bx[0]-.015),x2=clamp01(bx[2]+.015);return +(x1+(x2-x1)*clamp01(+v>1.5?(+v)/1000:v)).toFixed(4)};
     const g=(Array.isArray(c.groups)?c.groups:[]).map(z=>[mx(z.x),num(z.n)]).filter(z=>z[0]!=null&&z[1]>0).sort((a,b)=>a[0]-b[0]);
     const bad=(Array.isArray(c.bad)?c.bad:[]).map(z=>[mx(z.x),String(z.why||'').slice(0,80)]).filter(z=>z[0]!=null);
-    const op=(Array.isArray(c.other_prices)?c.other_prices:[]).map(num).filter(v=>v>0);out[i]={c:num(c.count),q:!!c.uncertain||bad.length>0,n:String(c.note||''),g,bad,op}});
+    const op=(Array.isArray(c.other_prices)?c.other_prices:[]).map(num).filter(v=>v>0);
+    /* body jednotlivých čárek → souřadnice ve fotce; počet = počet bodů */
+    let pts=null;if(bx&&Array.isArray(c.points)&&c.points.length){const x1=clamp01(bx[0]-.015),x2=clamp01(bx[2]+.015),y1=clamp01(bx[1]-.015),y2=clamp01(bx[3]+.015);
+      pts=c.points.filter(z=>Array.isArray(z)&&z.length>=2).map(z=>{const yy=+z[0]>1.5?+z[0]/1000:+z[0],xx=+z[1]>1.5?+z[1]/1000:+z[1];return[+(x1+(x2-x1)*clamp01(xx)).toFixed(4),+(y1+(y2-y1)*clamp01(yy)).toFixed(4)]});
+      pts=pts.filter((p,k)=>pts.findIndex(o=>Math.hypot(o[0]-p[0],o[1]-p[1])<.004)===k)}
+    const cc=num(c.count);let cnt=pts&&pts.length?pts.length:cc,q=!!c.uncertain||bad.length>0,n=String(c.note||'');
+    if(pts&&pts.length&&cc&&Math.abs(cc-pts.length)>0){q=true;n=(n?n+' · ':'')+`AI napsala ${cc}, ale označila ${pts.length} čárek`}
+    out[i]={c:cnt,q,n,g,bad,op,pts}});
   return out;
 }
-function merge(rows,A,B){rows.forEach((x,i)=>{const a=A[i],b=B[i];const c0=x.c;x.lc=c0;x.ga=a&&a.g&&a.g.length?a.g:null;x.gb=b&&b.g&&b.g.length?b.g:null;x.multi=[...new Set([...((a&&a.op)||[]),...((b&&b.op)||[])])].filter(v=>v!==+x.p);x.bad=[...((a&&a.bad)||[]),...((b&&b.bad)||[])].filter((z,k,arr)=>arr.findIndex(w=>Math.abs(w[0]-z[0])<.02)===k).slice(0,4);if(!x.ga&&x.gb){x.ga=x.gb;x.gb=null}
+function merge(rows,A,B){rows.forEach((x,i)=>{const a=A[i],b=B[i];const c0=x.c;x.lc=c0;x.pts=(a&&a.pts)||(b&&b.pts)||null;x.ga=a&&a.g&&a.g.length?a.g:null;x.gb=b&&b.g&&b.g.length?b.g:null;x.multi=[...new Set([...((a&&a.op)||[]),...((b&&b.op)||[])])].filter(v=>v!==+x.p);x.bad=[...((a&&a.bad)||[]),...((b&&b.bad)||[])].filter((z,k,arr)=>arr.findIndex(w=>Math.abs(w[0]-z[0])<.02)===k).slice(0,4);if(!x.ga&&x.gb){x.ga=x.gb;x.gb=null}
   if(a&&b){if(a.c===b.c){x.c=a.c;if(a.q||b.q){x.q=1;x.note=(a.n||b.n||x.note)}else if(x.q&&a.c===c0)x.q=1;else x.q=0;if(c0!==a.c&&x.q){x.alts=[...new Set([c0,a.c])].sort((m,n)=>m-n);x.note=(x.note?x.note+' · ':'')+`1. odhad ${c0}, přepočet ${a.c}`}}
     else{x.c=Math.max(a.c,b.c);x.q=1;x.alts=[...new Set([a.c,b.c,c0])].sort((m,n)=>m-n);x.note=`AI napočítala jednou ${a.c}, podruhé ${b.c}. Vyber nebo přepočítej.`+(a.n?' '+a.n:'')}}
   else if(a||b){const v=a||b;x.c=v.c;x.q=1;x.note='Přepočet jen jednou: '+v.c+(v.n?' – '+v.n:'')}
@@ -841,7 +850,7 @@ async function readPhoto(pid,ph,status,signal){
     /* počty z celé fotky jsou hrubé → každý řádek ještě jednou spočítat ze zvětšeného výřezu (1 dotaz na všechny řádky) */
     try{status('Počítám čárky ve zvětšených výřezech…',2);const fimg=await imgFromBlob((await shrink(rec.blob,2400,.9)).blob);const crops=[];for(const x of rows)crops.push(await cropRow(fimg,x.box,null));
       const idx=rows.map((x,i)=>i);const A=await countPass(rows,crops,idx,signal);
-      rows.forEach((x,i)=>{const a=A[i];x.ga=a&&a.g&&a.g.length?a.g:null;x.gb=null;x.bad=(a&&a.bad)||[];if(!a)return;
+      rows.forEach((x,i)=>{const a=A[i];x.ga=a&&a.g&&a.g.length?a.g:null;x.gb=null;x.bad=(a&&a.bad)||[];x.pts=a&&a.pts||null;if(!a)return;
         if(a.c===x.lc){x.c=a.c;if(a.q){x.q=1;x.note=(x.note?x.note+' · ':'')+(a.n||'AI si tu není jistá')}}
         else{x.c=a.c;x.q=1;x.alts=[...new Set([a.c,x.lc])].sort((m,n)=>m-n);x.note=`Celá fotka: ${x.lc}, zvětšený výřez: ${a.c}. Přepočítej (Ťukat čárky).`+(x.note?' · '+x.note:'')}})}
     catch(e){if(e&&e.name==='AbortError')throw e;log('VAROV','přepočet výřezů selhal – beru počty z celé fotky',errInfo(e));rows.forEach(x=>{x.q=1;x.note='Počet jen z celé fotky – zkontroluj.'})}
