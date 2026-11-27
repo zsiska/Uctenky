@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=42;
+const APP_VER=43;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -766,7 +766,9 @@ function assignGroups(prices,groups,ph){const P=prices.filter(p=>p.box&&p.v>0).m
       const second=C.filter(p=>p!==pr&&Math.abs(dy(p)-dy(pr))<sp*.15&&Math.abs(p.cx-pr.cx)<.05)[0];if(second){q=1;note=`Čárky jsou mezi cenami ${pr.v} a ${second.v} – zkontroluj.`}}
     A.push({g,pr,note,q,cont})}
   /* cena, za kterou nic není (napsaná až pod čárkami) → převezme pokračování těsně nad ní */
-  P.filter(p=>!A.some(a=>a.pr===p)).forEach(p=>{const cand=A.filter(a=>a.cont&&a.g.box[3]<=p.box[1]+sp*.3&&p.box[1]-a.g.box[3]<sp*1.5&&a.g.box[0]<p.box[2]+.15).sort((a,b)=>b.g.box[3]-a.g.box[3])[0];
+  const lowest=Math.max(...P.map(p=>p.cy));
+  P.filter(p=>!A.some(a=>a.pr===p)).forEach(p=>{if(p.cy<lowest-.005){log('INFO','čtení: cena bez čárek (uprostřed – nic nepřesouvám)',p.v);return} /* jen poslední cena dole na papíře */
+    const cand=A.filter(a=>a.cont&&a.g.box[3]<=p.box[1]+sp*.3&&p.box[1]-a.g.box[3]<sp*1.5&&a.g.box[0]<p.box[2]+.15).sort((a,b)=>b.g.box[3]-a.g.box[3])[0];
     if(cand){const old=cand.pr.v;cand.pr=p;cand.cont=false;cand.q=1;cand.note=`Cena ${p.v} je napsaná pod čárkami – přiřazeno k ${p.v} (podle pořadí čtení by patřily k ${old}). Zkontroluj.`;cand.alt=old}
     else log('INFO','čtení: cena bez čárek',p.v)});
   const byPrice=new Map(),out=[];
