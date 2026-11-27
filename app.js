@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=41;
+const APP_VER=42;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -615,7 +615,7 @@ async function readSSE(res,onChunk){
 async function gemini(parts,signal,json){
   let models=settings.aiModel?[settings.aiModel]:[...DEF_MODELS];let last;let listed=false;let triedNoThink=false;const waited={};let q429=null,busy=null;
   const pause=async w=>{aiChunk&&aiChunk(-w,false);await new Promise((ok,ko)=>{const t=setTimeout(ok,w*1000);signal&&signal.addEventListener('abort',()=>{clearTimeout(t);ko({name:'AbortError'})},{once:true})});aiChunk&&aiChunk(0,false)};
-  const more=async lite=>{if(listed)return;listed=true;try{const l=await listModels();let rest=l.filter(x=>!models.includes(x)&&!/tts|image|embed|live|audio|veo|imagen/i.test(x));if(freeOn()){rest=rest.filter(x=>!/lite/i.test(x));lite=false}if(lite)rest.sort((a,b)=>(/lite/.test(b)?1:0)-(/lite/.test(a)?1:0));models.push(...rest.slice(0,5))}catch(e){if(e.code==='key')throw e}};
+  const more=async lite=>{if(listed)return;listed=true;try{const l=await listModels();let rest=l.filter(x=>!models.includes(x)&&!/tts|image|embed|live|audio|veo|imagen/i.test(x));if(freeOn()){rest=rest.filter(x=>!/lite|pro|ultra|thinking|deep/i.test(x));rest.sort((a,b)=>(/2\.5-flash$/.test(b)?1:0)-(/2\.5-flash$/.test(a)?1:0));lite=false}if(lite)rest.sort((a,b)=>(/lite/.test(b)?1:0)-(/lite/.test(a)?1:0));models.push(...rest.slice(0,5))}catch(e){if(e.code==='key')throw e}};
   for(let i=0;i<models.length;i++){const m=models[i];const t0=Date.now();
     const stream=!!(window.ReadableStream&&TextDecoder);const cb=aiChunk;
     const tc=new AbortController();let timedOut=false;const tmo=setTimeout(()=>{timedOut=true;tc.abort()},(+settings.aiTimeout||40)*1000);const onAb=()=>tc.abort();signal&&signal.addEventListener('abort',onAb,{once:true});
@@ -634,7 +634,7 @@ async function gemini(parts,signal,json){
     else{done();last=await gErr(res);log('CHYBA','Gemini '+m,last)}
     if(st>=500||/high demand|overloaded|UNAVAILABLE|try again later/i.test(last.msg||'')){busy={code:'busy',msg:last.msg};
       /* přetížený model: 2× počkat a zkusit znovu, pak jiný model */
-      const n=waited[m]||0;if(n<2){waited[m]=n+1;const w=n?10:4;log('INFO','model přetížený – čekám',{s:w,model:m});await pause(w);i--;continue}
+      const n=waited[m]||0;if(n<1){waited[m]=n+1;const w=3;log('INFO','model přetížený – čekám',{s:w,model:m});await pause(w);i--;continue}
       await more(false);continue}
     if(st===400&&/minimal/i.test(last.msg)&&!settings.noMinimal){settings.noMinimal=true;saveSettings();i--;continue}
     if(st===400&&/media.?resolution/i.test(last.msg)&&!settings.noMediaRes){settings.noMediaRes=true;saveSettings();i--;continue}
@@ -649,6 +649,7 @@ async function gemini(parts,signal,json){
     if(st===404){await more(false);continue}
     throw last;
   }
+  if(busy&&q429&&q429.quota&&q429.quota.zero)throw busy; /* záložní model bez bezplatného limitu nemá přebít skutečnou příčinu */
   throw q429||busy||last||{code:0};
 }
 function rowsOfJSON(d){if(!d)return[];if(Array.isArray(d))return d;for(const k of ['rows','items','polozky','položky','lines','radky','řádky','data'])if(Array.isArray(d[k]))return d[k];const v=Object.values(d).find(Array.isArray);return v||[]}
@@ -658,7 +659,7 @@ const quotaTxt=e=>{const q=e.quota||{};
   if(q.zero)return 'Google tomuto klíči nedává žádný bezplatný limit (limit 0). Vytvoř nový klíč na aistudio.google.com → Get API key → Create API key → „Create API key in new project“ a vlož ho sem. Klíč by měl začínat „AIza“.';
   if(q.day)return 'Dnešní bezplatný limit Googlu je vyčerpaný (u všech modelů, které klíč smí). Obnoví se zítra v 9:00. Do té doby počítej čárky ručně, nebo použij jiný klíč (jiný Google účet).';
   return 'Google je teď přetížený nebo došel minutový limit. Zkus to za minutu.'+(e.msg?' ('+String(e.msg).slice(0,100)+')':'')};
-const aiErr=e=>e&&e.name==='AbortError'?'Zastaveno.':e&&e.code==='net'?e.msg+(/^AIza/.test(settings.aiKey||'')?'.':'. Klíč Gemini má začínat „AIza“ – vytvoř nový na aistudio.google.com/app/apikey.'):e&&e.code==='key'?'Klíč nefunguje'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'. Zkontroluj ho v Nastavení.':e&&e.code===429?quotaTxt(e):e&&e.code==='busy'?'Google má teď AI přetíženou (hlavně večer). Appka to zkoušela opakovaně i s jiným modelem. Zkus to za pár minut znovu – fotka zůstává uložená.':e&&e.code===404?'Žádný model není pro tento klíč dostupný'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'.':!navigator.onLine?'Jsi offline. Čtení přes AI potřebuje internet.':'Přečíst fotku se nepovedlo: '+(errTxt(e)||'neznámá chyba').slice(0,160)+'. Zkus to znovu.';
+const aiErr=e=>e&&e.name==='AbortError'?'Zastaveno.':e&&e.code==='net'?e.msg+(/^AIza/.test(settings.aiKey||'')?'.':'. Klíč Gemini má začínat „AIza“ – vytvoř nový na aistudio.google.com/app/apikey.'):e&&e.code==='key'?'Klíč nefunguje'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'. Zkontroluj ho v Nastavení.':e&&e.code===429?quotaTxt(e):e&&e.code==='busy'?'Google teď odpovídá moc pomalu nebo je přetížený'+(e.msg&&/neodpověděl/.test(e.msg)?' ('+e.msg+')':'')+'. Appka to zkusila znovu i s jiným modelem. Zkus to za pár minut – fotka zůstává uložená.':e&&e.code===404?'Žádný model není pro tento klíč dostupný'+(e.msg?' ('+String(e.msg).slice(0,140)+')':'')+'.':!navigator.onLine?'Jsi offline. Čtení přes AI potřebuje internet.':'Přečíst fotku se nepovedlo: '+(errTxt(e)||'neznámá chyba').slice(0,160)+'. Zkus to znovu.';
 const LAYOUT_PROMPT=`Na fotkách je ručně psaná hospodská účtenka (útrata jednoho člověka). Na začátku řádku je cena v Kč (např. 55, 35, 40, 30, 28, 25, 20, 18, někdy 145 nebo 250), za ní čárky = počet kusů.
 Pravidla:
 - každá svislá čárka = 1 kus; 4 čárky přeškrtnuté pátou šikmou čárkou = 5 kusů
