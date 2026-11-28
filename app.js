@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=54;
+const APP_VER=55;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -959,7 +959,10 @@ async function localCount(img,box,pbox){
   const bl=(src,horiz,r)=>{const o=new Float32Array(w*h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){let s=0,n=0;for(let k=-r;k<=r;k++){const xx=horiz?x+k:x,yy=horiz?y:y+k;if(xx<0||yy<0||xx>=w||yy>=h)continue;s+=src[yy*w+xx];n++}o[y*w+x]=s/n}return o};
   let bg=mx(mx(L,true,7),false,7);bg=bl(bl(bg,true,8),false,8);
   /* inkoust = tmavší než okolní papír a NE teplá barva (stůl, okraj lístku jsou do oranžova/hněda; propiska je modrá/černá) */
-  const ink0=new Uint8Array(w*h);for(let i=0;i<w*h;i++){const R=d[i*4],G=d[i*4+1],Bb=d[i*4+2];const warm=R-Bb>22&&R>=G;const r=L[i]/Math.max(1,bg[i]);const blue=Bb-R>8;ink0[i]=!warm&&(r<.78||(blue&&r<.93))?1:0}
+  /* barva okolního papíru (R−B) – papír ve stínu bývá do hněda, inkoust na něm taky; „teplé“ je jen to, co je teplejší než papír kolem */
+  const Sm=new Float32Array(w*h),Mm=new Float32Array(w*h);for(let i=0;i<w*h;i++){if(L[i]/Math.max(1,bg[i])>.88){Sm[i]=d[i*4]-d[i*4+2];Mm[i]=1}}
+  const bS=bl(bl(Sm,true,15),false,15),bM=bl(bl(Mm,true,15),false,15);let gS=0,gM=0;for(let i=0;i<w*h;i++){gS+=Sm[i];gM+=Mm[i]}const gRB=gM?gS/gM:20;
+  const ink0=new Uint8Array(w*h);for(let i=0;i<w*h;i++){const R=d[i*4],G=d[i*4+1],Bb=d[i*4+2];const pRB=bM[i]>.02?bS[i]/bM[i]:gRB;const warm=(R-Bb)-pRB>28&&R>=G;const r=L[i]/Math.max(1,bg[i]);const blue=(Bb-R)>(-pRB)+8;ink0[i]=!warm&&(r<.78||(blue&&r<.93))?1:0}
   /* spojit přerušené (slabé) čárky svisle – mezery do 4 px */
   const ink=new Uint8Array(w*h);const gy=Math.max(3,Math.round(h*.008));for(let y=0;y<h;y++)for(let x=0;x<w;x++){if(!ink0[y*w+x])continue;for(let dy=-gy;dy<=gy;dy++){const yy=y+dy;if(yy<0||yy>=h)continue;ink[yy*w+x]=1;if(Math.abs(dy)<=gy/2){if(x>0)ink[yy*w+x-1]=1;if(x<w-1)ink[yy*w+x+1]=1}}}
   /* souvislé tahy */
