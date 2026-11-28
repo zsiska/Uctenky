@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=53;
+const APP_VER=54;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -971,7 +971,9 @@ async function localCount(img,box,pbox){
   const member=new Uint8Array(comps.length);let nm=0,nx=0;
   /* čárky rozdělit do řádků podle svislé polohy; započítat jen řádky, které leží hlavně v rámečku
      (konce čárek z řádku nad a začátky čárek z řádku pod se tak vyřadí) */
-  const cand=[];for(let k=1;k<comps.length;k++){const q=comps[k];const ch=q.y1-q.y0+1;if(ch<bh*.22||q.n<bh*.3)continue;const ov=Math.max(0,Math.min(q.y1,by1)-Math.max(q.y0,by0))/ch;if(ov<=0){nx++;continue}cand.push({k,cy:(q.y0+q.y1)/2,ch,ov})}
+  const cand=[];for(let k=1;k<comps.length;k++){const q=comps[k];const ch=q.y1-q.y0+1;if(ch<bh*.22||q.n<bh*.3)continue;const ov=Math.max(0,Math.min(q.y1,by1)-Math.max(q.y0,by0))/ch;if(ov<=0){nx++;continue}
+    /* poloha tahu podle části v rámečku (tah spojený s čárkou z řádku nad/pod se neposune mimo svůj řádek) */
+    const cy=(Math.max(q.y0,by0-bh*.08)+Math.min(q.y1,by1+bh*.08))/2;cand.push({k,cy,ch,ov:Math.max(ov,q.y0<by0&&q.y1<=by1+bh*.1?Math.min(1,(q.y1-by0)/Math.max(1,bh*.5)):ov)})}
   const hS=cand.map(c=>c.ch).sort((a,b)=>a-b);const Hm0=hS.length?hS[Math.floor(hS.length/2)]:bh;
   cand.sort((a,b)=>a.cy-b.cy);const rowsC=[];for(const c of cand){const R=rowsC[rowsC.length-1];if(R&&c.cy-R.last<Hm0*.3){R.items.push(c);R.last=c.cy}else rowsC.push({items:[c],last:c.cy})}
   /* osamocené tahy (např. čárka spojená s koncem čárky z řádku nad) přiřadit k nejbližšímu velkému řádku */
@@ -998,14 +1000,21 @@ async function localCount(img,box,pbox){
   const B=[];for(const b of bands){const l=B[B.length-1];if(l&&b[0]-l[1]<bigH*.12)l[1]=b[1];else B.push(b.slice())}if(!B.length)B.push([by0,by1]);
   const runsAt=y=>{const R=[];let s=-1;for(let x=0;x<w;x++){const v=m2[y*w+x]||(y>0&&m2[(y-1)*w+x])||(y<h-1&&m2[(y+1)*w+x]);if(v&&s<0)s=x;if(!v&&s>=0){R.push([s,x]);s=-1}}if(s>=0)R.push([s,w]);
     const M=[];for(const r of R){if(M.length&&r[0]-M[M.length-1][1]<2)M[M.length-1][1]=r[1];else M.push(r)}return M};
-  let total=0,pts=[],unsure=false;const dbg=[];
+  let total=0,pts=[],unsure=false;const dbg=[];const loc=[];const bestL=[];
   for(const [b0,b1] of B){const bhh=b1-b0;const lines=[];for(let k=0;k<10;k++){const y=Math.round(b0+(.3+k*.05)*bhh);if(y>=0&&y<h)lines.push({y,R:runsAt(y)})}
     if(!lines.length)continue;const counts=lines.map(l=>l.R.length).sort((a,b)=>a-b);const med=counts[Math.floor(counts.length/2)];
-    const best=lines.filter(l=>l.R.length===med).sort((a,b)=>Math.abs(a.y-(b0+bhh*.52))-Math.abs(b.y-(b0+bhh*.52)))[0]||lines[0];
+    const best=lines.filter(l=>l.R.length===med).sort((a,b)=>Math.abs(a.y-(b0+bhh*.52))-Math.abs(b.y-(b0+bhh*.52)))[0]||lines[0];bestL.push(best);
     best.R.forEach(r=>{let cx=(r[0]+r[1])/2,y=best.y;for(;y<h-1;){let got=0;for(let k=1;k<=4&&y+k<h;k++){let s=0,n=0;for(let x=Math.max(0,Math.round(cx)-4);x<=Math.min(w-1,Math.round(cx)+4);x++)if(m2[(y+k)*w+x]){s+=x;n++}if(n){cx=s/n;y+=k;got=1;break}}if(!got)break}
-      pts.push([+((sx+cx/w*sw)/W).toFixed(4),+((sy+y/h*sh)/Hh).toFixed(4)])});
+      pts.push([+((sx+cx/w*sw)/W).toFixed(4),+((sy+y/h*sh)/Hh).toFixed(4)]);loc.push([cx,y])});
     total+=med;if(counts[counts.length-2]-counts[1]>2)unsure=true;dbg.push(lines.map(l=>l.R.length))}
-  log('INFO','v telefonu',{tahy_radku:nm,vyrazeno_z_vedlejsich:nx,pasy:B.length,rezy:dbg,vysledek:total});
+  /* pojistka: každý zřetelný tah řádku musí mít tečku – když ji řez minul (čárky se v místě řezu dotýkají), doplnit */
+  let added=0;for(let k=1;k<comps.length;k++){if(!member[k])continue;const q=comps[k];if(q.y1-q.y0+1<Hm0*.7)continue;
+    const bl=bestL.find(b=>q.y0<=b.y&&q.y1>=b.y);if(!bl)continue;let xa=w,xb=-1;for(let x=q.x0;x<=q.x1;x++)if(lab[bl.y*w+x]===k){if(x<xa)xa=x;if(x>xb)xb=x}if(xb<0)continue;
+    if(bl.R.some(r=>r[0]<=xb+1&&r[1]>=xa-1))continue;
+    let bx=0,bn=0;for(let x=q.x0;x<=q.x1;x++)if(lab[q.y1*w+x]===k){bx+=x;bn++}const cx=bn?bx/bn:(q.x0+q.x1)/2;
+    loc.push([cx,q.y1]);pts.push([+((sx+cx/w*sw)/W).toFixed(4),+((sy+q.y1/h*sh)/Hh).toFixed(4)]);total++;added++}
+  if(added)unsure=true;
+  log('INFO','v telefonu',{doplneno:added,tahy_radku:nm,vyrazeno_z_vedlejsich:nx,pasy:B.length,rezy:dbg,vysledek:total});
   return{c:total,pts,unsure:unsure||B.length>1}}
 try{window.uctenkyLocalCount=localCount}catch(e){}
 async function localCountRow(r,x){const p=(r.photos||[])[x.ph||0];if(!p||!x.box)throw{code:'empty',msg:'Řádek není označený na fotce'};const rec=await getOne('photos',p.id);const img=await imgFromBlob(rec.blob);return localCount(img,x.box,x.pbox)}
