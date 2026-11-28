@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=48;
+const APP_VER=49;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -522,7 +522,8 @@ async function doLocal(r,i,quiet){const x=rowsOf(r)[i];if(!x||!x.box){toast('Nej
   try{const res=await localCountRow(r,x);const prev=+x.c||0;snap([r]);x.pts=res.pts;x.ga=null;x.gb=null;x.bad=[];
     if(prev&&prev!==res.c&&x.ai){x.q=1;x.alts=[...new Set([prev,res.c])].sort((a,b)=>a-b);x.note=`AI: ${prev}, telefon: ${res.c}. Zkontroluj tečky.`}
     else{x.q=res.unsure?1:0;x.alts=null;x.note=res.unsure?'Spočítáno v telefonu – nejisté (víc řádků nebo slité čárky), zkontroluj tečky.':'Spočítáno v telefonu – zkontroluj tečky.'}
-    x.c=res.c;x.local=1;save(r);if(!quiet){renderZoom();offerUndo(`V telefonu: ${res.c} čárek`)}}
+    x.c=res.c;x.local=1;save(r);if(!quiet&&zMode==='tap'&&i===zCur){const p0=(r.photos||[])[x.ph||0]||{};const H0=(p0.h&&p0.w)?p0.h/p0.w:1.4;tapMarks=res.pts.map(p=>[p[0],p[1]*H0,1])}
+    if(!quiet){renderZoom();offerUndo(`V telefonu: ${res.c} čárek`)}}
   catch(e){toast(errTxt(e)||'Spočítat se nepovedlo',true);log('CHYBA','v telefonu',errInfo(e))}}
 $('zloc').onclick=()=>{doLocal(getR(curId),zCur)};
 $('aloc').onclick=()=>{const r=getR(curId);$('ai').close();if(rowsOf(r).some(x=>x.box&&(x.ph||0)===curPhoto)){const b=document.querySelector('[data-a=localall]');b&&b.click()}else{settings.readMode='local';saveSettings();render();toast('Bez AI: klepni dole na cenu a na fotce táhni přes její čárky')}};
@@ -962,8 +963,8 @@ async function localCount(img,box,pbox){
     while(st.length){const q=st.pop();const qx=q%w,qy=(q-qx)/w;n++;if(qx<x0)x0=qx;if(qx>x1)x1=qx;if(qy<y0)y0=qy;if(qy>y1)y1=qy;
       for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const nx=qx+dx,ny=qy+dy;if(nx<0||ny<0||nx>=w||ny>=h)continue;const k=ny*w+nx;if(ink[k]&&!lab[k]){lab[k]=id;st.push(k)}}}
     comps.push({x0,x1,y0,y1,n,id})}}
-  const hs=comps.map(c=>c.y1-c.y0+1).sort((a,b)=>a-b);const H0=hs.length?hs[Math.floor(hs.length*.9)]:h;
-  if(comps.length&&h>H0*1.7){const keep=comps.filter(c=>c.y1-c.y0+1>=H0*.4);const ws=keep.map(c=>c.x1-c.x0+1).sort((a,b)=>a-b);const mw=ws.length?ws[Math.floor(ws.length/3)]:1;
+  const hs=comps.map(c=>c.y1-c.y0+1).filter(v=>v>h*.12).sort((a,b)=>a-b);const H0=hs.length?hs[Math.floor(hs.length/2)]:h; /* medián výšky čárky (bez smetí) */
+  if(comps.length&&h>H0*1.7){const keep=comps.filter(c=>c.y1-c.y0+1>=H0*.45&&c.n>H0*1.2);const ws=keep.map(c=>c.x1-c.x0+1).sort((a,b)=>a-b);const mw=ws.length?ws[Math.floor(ws.length/3)]:1;
     let total=0;const pts=[];keep.forEach(c=>{const k=Math.max(1,Math.round((c.x1-c.x0+1)/Math.max(mw*1.6,1)));total+=k;
       for(let t=0;t<k;t++){const cx=c.x0+(c.x1-c.x0+1)*(t+.5)/k;pts.push([+((sx+cx/w*sw)/W).toFixed(4),+((sy+(c.y1+1)/h*sh)/Hh).toFixed(4)])}});
     log('INFO','v telefonu: víc řádků – podle tahů',{tahu:keep.length,vysledek:total});return{c:total,pts,unsure:true}}
