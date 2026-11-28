@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=52;
+const APP_VER=53;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -969,13 +969,25 @@ async function localCount(img,box,pbox){
     comps.push({x0,x1,y0,y1,n})}}
   /* patří k řádku: střed tahu leží v rámečku a aspoň polovina tahu je uvnitř; čárky řádku nad/pod se vyřadí */
   const member=new Uint8Array(comps.length);let nm=0,nx=0;
-  for(let k=1;k<comps.length;k++){const q=comps[k];const ch=q.y1-q.y0+1;if(ch<bh*.22||q.n<bh*.3)continue;const cy=(q.y0+q.y1)/2;const ov=Math.max(0,Math.min(q.y1,by1)-Math.max(q.y0,by0))/ch;
-    if(cy>=by0&&cy<=by1&&ov>=.5){member[k]=1;nm++}else nx++}
+  /* čárky rozdělit do řádků podle svislé polohy; započítat jen řádky, které leží hlavně v rámečku
+     (konce čárek z řádku nad a začátky čárek z řádku pod se tak vyřadí) */
+  const cand=[];for(let k=1;k<comps.length;k++){const q=comps[k];const ch=q.y1-q.y0+1;if(ch<bh*.22||q.n<bh*.3)continue;const ov=Math.max(0,Math.min(q.y1,by1)-Math.max(q.y0,by0))/ch;if(ov<=0){nx++;continue}cand.push({k,cy:(q.y0+q.y1)/2,ch,ov})}
+  const hS=cand.map(c=>c.ch).sort((a,b)=>a-b);const Hm0=hS.length?hS[Math.floor(hS.length/2)]:bh;
+  cand.sort((a,b)=>a.cy-b.cy);const rowsC=[];for(const c of cand){const R=rowsC[rowsC.length-1];if(R&&c.cy-R.last<Hm0*.3){R.items.push(c);R.last=c.cy}else rowsC.push({items:[c],last:c.cy})}
+  /* osamocené tahy (např. čárka spojená s koncem čárky z řádku nad) přiřadit k nejbližšímu velkému řádku */
+  {const big=rowsC.filter(R=>R.items.length>=3);if(big.length){const cyOf=R=>R.items.reduce((s,c)=>s+c.cy,0)/R.items.length;const cs=big.map(cyOf);
+    for(const R of rowsC.filter(R=>R.items.length<3)){for(const c of R.items){let bi=0;cs.forEach((v,i)=>{if(Math.abs(v-c.cy)<Math.abs(cs[bi]-c.cy))bi=i});if(Math.abs(cs[bi]-c.cy)<Hm0*.6)big[bi].items.push(c);else big.push({items:[c]})}}
+    rowsC.length=0;rowsC.push(...big)}}
+  rowsC.forEach(R=>R.ovm=R.items.reduce((s,c)=>s+c.ov*c.ch,0)/R.items.reduce((s,c)=>s+c.ch,0));const main=rowsC.reduce((b,R)=>!b||R.ovm*R.items.length>b.ovm*b.items.length?R:b,null);
+  for(const R of rowsC){const ovm=R.ovm;
+    /* hlavní řádek rámečku vždy; další řádky jen když jsou v rámečku skoro celé */
+    if(R===main?ovm>=.4:ovm>=.8){for(const c of R.items)if(c.ov>=.3){member[c.k]=1;nm++}else nx++}else nx+=R.items.length}
+  const multi=rowsC.filter(R=>R.items.some(c=>member[c.k])).length>1;
   const m2=new Uint8Array(w*h);for(let i=0;i<w*h;i++)if(lab[i]&&member[lab[i]])m2[i]=1;
-  if(window.__lcdbg)window.__lcdbg={w,h,by0,by1,m2:Array.from(m2),ink:Array.from(ink)};
+  if(window.__lcdbg)window.__lcdbg={w,h,by0,by1,Hm0,rows:rowsC.map(R=>({n:R.items.length,cy:R.items.map(c=>Math.round(c.cy)),ov:R.items.map(c=>+c.ov.toFixed(2))})),m2:Array.from(m2),ink:Array.from(ink)};
   /* rámeček přes víc řádků čárek (vyšší než ~1,7 čárky) → počítat po tazích */
   {const M=comps.filter((q,k)=>k&&member[k]);const hs=M.map(q=>q.y1-q.y0+1).sort((a,b)=>a-b);const Hm=hs.length?hs[Math.floor(hs.length/2)]:bh;
-   if(M.length&&bh>Hm*1.7){const ws=M.map(q=>q.x1-q.x0+1).sort((a,b)=>a-b);const mw=ws[Math.floor(ws.length/3)]||1;let total=0;const pts=[];
+   if(M.length&&multi){const ws=M.map(q=>q.x1-q.x0+1).sort((a,b)=>a-b);const mw=ws[Math.floor(ws.length/3)]||1;let total=0;const pts=[];
      M.forEach(q=>{const k=Math.max(1,Math.round((q.x1-q.x0+1)/Math.max(mw*1.6,1)));total+=k;for(let t=0;t<k;t++){const cx=q.x0+(q.x1-q.x0+1)*(t+.5)/k;pts.push([+((sx+cx/w*sw)/W).toFixed(4),+((sy+(q.y1+1)/h*sh)/Hh).toFixed(4)])}});
      log('INFO','v telefonu: víc řádků – po tazích',{tahu:M.length,vysledek:total});return{c:total,pts,unsure:true}}}
   /* pásy uvnitř rámečku (víc řádků čárek v jednom rámečku) */
