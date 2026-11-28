@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=49;
+const APP_VER=50;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -955,7 +955,8 @@ async function localCount(img,box,pbox){
   const mx=(src,horiz,r)=>{const o=new Float32Array(w*h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){let m=0;for(let k=-r;k<=r;k++){const xx=horiz?x+k:x,yy=horiz?y:y+k;if(xx<0||yy<0||xx>=w||yy>=h)continue;const v=src[yy*w+xx];if(v>m)m=v}o[y*w+x]=m}return o};
   const bl=(src,horiz,r)=>{const o=new Float32Array(w*h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){let s=0,n=0;for(let k=-r;k<=r;k++){const xx=horiz?x+k:x,yy=horiz?y:y+k;if(xx<0||yy<0||xx>=w||yy>=h)continue;s+=src[yy*w+xx];n++}o[y*w+x]=s/n}return o};
   let bg=mx(mx(L,true,7),false,7);bg=bl(bl(bg,true,8),false,8);
-  const ink=new Uint8Array(w*h);for(let i=0;i<w*h;i++)ink[i]=L[i]/Math.max(1,bg[i])<.78?1:0;
+  /* inkoust = tmavší než okolní papír a NE teplá barva (stůl, okraj lístku, stín na dřevě jsou do oranžova/hněda; propiska je modrá/černá) */
+  const ink=new Uint8Array(w*h);for(let i=0;i<w*h;i++){const R=d[i*4],G=d[i*4+1],Bb=d[i*4+2];const warm=R-Bb>22&&R>=G;ink[i]=!warm&&L[i]/Math.max(1,bg[i])<.78?1:0}
   const runsAt=y=>{const R=[];let s=-1;for(let x=0;x<w;x++){const v=ink[y*w+x]||(y>0&&ink[(y-1)*w+x])||(y<h-1&&ink[(y+1)*w+x]);if(v&&s<0)s=x;if(!v&&s>=0){R.push([s,x]);s=-1}}if(s>=0)R.push([s,w]);
     const M=[];for(const r of R){if(M.length&&r[0]-M[M.length-1][1]<2)M[M.length-1][1]=r[1];else M.push(r)}return M};
   /* souvislé tahy (komponenty) – výška typické čárky; když je výřez vyšší než ~1,7 čárky, je v něm víc řádků */
