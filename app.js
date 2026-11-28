@@ -21,7 +21,7 @@ const fmtD=d=>{if(!d)return'';const [y,m,dd]=d.split('-');return `${+dd}. ${+m}.
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 const num=v=>Math.max(0,parseInt(String(v).replace(/\D/g,''))||0);
 const plur=(n,a,b,c)=>n===1?a:n>=2&&n<=4?b:c;
-const APP_VER=50;
+const APP_VER=52;
 const DEF_PRICES=[55,35,40,30,28,25,20,18];
 
 /* ---------- IndexedDB ---------- */
@@ -947,43 +947,53 @@ async function regionRows(fimg,box,ph,signal){const m=.012;const x1=clamp01(box[
 async function localCount(img,box,pbox){
   const W=img.naturalWidth,Hh=img.naturalHeight;let bx0=box[0];
   if(pbox&&pbox[2]>box[0]&&pbox[2]<box[2]-.02&&Math.min(pbox[3],box[3])-Math.max(pbox[1],box[1])>0)bx0=Math.max(bx0,pbox[2]+.004);
-  const sx=bx0*W,sy=box[1]*Hh,sw=(box[2]-bx0)*W,sh=(box[3]-box[1])*Hh;if(sw<4||sh<4)return{c:0,pts:[]};
-  const s0=Math.min(2,1400/sw,640/sh);const w=Math.max(8,Math.round(sw*s0)),h=Math.max(8,Math.round(sh*s0));const c=document.createElement('canvas');c.width=w;c.height=h;const g=c.getContext('2d',{willReadFrequently:true});
+  /* výřez o kus vyšší než rámeček, aby byly vidět celé čárky (i ty ze sousedních řádků – ty se pak vyřadí) */
+  const bhN=box[3]-box[1];const ey0=Math.max(0,box[1]-bhN*.6),ey1=Math.min(1,box[3]+bhN*.6);
+  const sx=bx0*W,sy=ey0*Hh,sw=(box[2]-bx0)*W,sh=(ey1-ey0)*Hh;if(sw<4||sh<4)return{c:0,pts:[]};
+  const s0=Math.min(2,1400/sw,900/sh);const w=Math.max(8,Math.round(sw*s0)),h=Math.max(8,Math.round(sh*s0));
+  const c=document.createElement('canvas');c.width=w;c.height=h;const g=c.getContext('2d',{willReadFrequently:true});
   g.drawImage(img,sx,sy,sw,sh,0,0,w,h);const d=g.getImageData(0,0,w,h).data;
+  const by0=Math.round((box[1]-ey0)/(ey1-ey0)*h),by1=Math.round((box[3]-ey0)/(ey1-ey0)*h),bh=Math.max(1,by1-by0);
   const L=new Float32Array(w*h);for(let i=0;i<w*h;i++)L[i]=.3*d[i*4]+.59*d[i*4+1]+.11*d[i*4+2];
-  /* pozadí: maximum v okně 15×15 (papír) a rozmazání */
   const mx=(src,horiz,r)=>{const o=new Float32Array(w*h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){let m=0;for(let k=-r;k<=r;k++){const xx=horiz?x+k:x,yy=horiz?y:y+k;if(xx<0||yy<0||xx>=w||yy>=h)continue;const v=src[yy*w+xx];if(v>m)m=v}o[y*w+x]=m}return o};
   const bl=(src,horiz,r)=>{const o=new Float32Array(w*h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){let s=0,n=0;for(let k=-r;k<=r;k++){const xx=horiz?x+k:x,yy=horiz?y:y+k;if(xx<0||yy<0||xx>=w||yy>=h)continue;s+=src[yy*w+xx];n++}o[y*w+x]=s/n}return o};
   let bg=mx(mx(L,true,7),false,7);bg=bl(bl(bg,true,8),false,8);
-  /* inkoust = tmavší než okolní papír a NE teplá barva (stůl, okraj lístku, stín na dřevě jsou do oranžova/hněda; propiska je modrá/černá) */
-  const ink=new Uint8Array(w*h);for(let i=0;i<w*h;i++){const R=d[i*4],G=d[i*4+1],Bb=d[i*4+2];const warm=R-Bb>22&&R>=G;ink[i]=!warm&&L[i]/Math.max(1,bg[i])<.78?1:0}
-  const runsAt=y=>{const R=[];let s=-1;for(let x=0;x<w;x++){const v=ink[y*w+x]||(y>0&&ink[(y-1)*w+x])||(y<h-1&&ink[(y+1)*w+x]);if(v&&s<0)s=x;if(!v&&s>=0){R.push([s,x]);s=-1}}if(s>=0)R.push([s,w]);
-    const M=[];for(const r of R){if(M.length&&r[0]-M[M.length-1][1]<2)M[M.length-1][1]=r[1];else M.push(r)}return M};
-  /* souvislé tahy (komponenty) – výška typické čárky; když je výřez vyšší než ~1,7 čárky, je v něm víc řádků */
-  const lab=new Int32Array(w*h);const comps=[];{let id=0;const st=[];for(let i=0;i<w*h;i++){if(!ink[i]||lab[i])continue;id++;let x0=w,x1=0,y0=h,y1=0,n=0;st.push(i);lab[i]=id;
+  /* inkoust = tmavší než okolní papír a NE teplá barva (stůl, okraj lístku jsou do oranžova/hněda; propiska je modrá/černá) */
+  const ink0=new Uint8Array(w*h);for(let i=0;i<w*h;i++){const R=d[i*4],G=d[i*4+1],Bb=d[i*4+2];const warm=R-Bb>22&&R>=G;const r=L[i]/Math.max(1,bg[i]);const blue=Bb-R>8;ink0[i]=!warm&&(r<.78||(blue&&r<.93))?1:0}
+  /* spojit přerušené (slabé) čárky svisle – mezery do 4 px */
+  const ink=new Uint8Array(w*h);const gy=Math.max(3,Math.round(h*.008));for(let y=0;y<h;y++)for(let x=0;x<w;x++){if(!ink0[y*w+x])continue;for(let dy=-gy;dy<=gy;dy++){const yy=y+dy;if(yy<0||yy>=h)continue;ink[yy*w+x]=1;if(Math.abs(dy)<=gy/2){if(x>0)ink[yy*w+x-1]=1;if(x<w-1)ink[yy*w+x+1]=1}}}
+  /* souvislé tahy */
+  const lab=new Int32Array(w*h);const comps=[null];{let id=0;const st=[];for(let i=0;i<w*h;i++){if(!ink[i]||lab[i])continue;id++;let x0=w,x1=0,y0=h,y1=0,n=0;st.push(i);lab[i]=id;
     while(st.length){const q=st.pop();const qx=q%w,qy=(q-qx)/w;n++;if(qx<x0)x0=qx;if(qx>x1)x1=qx;if(qy<y0)y0=qy;if(qy>y1)y1=qy;
       for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const nx=qx+dx,ny=qy+dy;if(nx<0||ny<0||nx>=w||ny>=h)continue;const k=ny*w+nx;if(ink[k]&&!lab[k]){lab[k]=id;st.push(k)}}}
-    comps.push({x0,x1,y0,y1,n,id})}}
-  const hs=comps.map(c=>c.y1-c.y0+1).filter(v=>v>h*.12).sort((a,b)=>a-b);const H0=hs.length?hs[Math.floor(hs.length/2)]:h; /* medián výšky čárky (bez smetí) */
-  if(comps.length&&h>H0*1.7){const keep=comps.filter(c=>c.y1-c.y0+1>=H0*.45&&c.n>H0*1.2);const ws=keep.map(c=>c.x1-c.x0+1).sort((a,b)=>a-b);const mw=ws.length?ws[Math.floor(ws.length/3)]:1;
-    let total=0;const pts=[];keep.forEach(c=>{const k=Math.max(1,Math.round((c.x1-c.x0+1)/Math.max(mw*1.6,1)));total+=k;
-      for(let t=0;t<k;t++){const cx=c.x0+(c.x1-c.x0+1)*(t+.5)/k;pts.push([+((sx+cx/w*sw)/W).toFixed(4),+((sy+(c.y1+1)/h*sh)/Hh).toFixed(4)])}});
-    log('INFO','v telefonu: víc řádků – podle tahů',{tahu:keep.length,vysledek:total});return{c:total,pts,unsure:true}}
-  /* pásy (řádky čárek) podle vodorovného profilu inkoustu */
-  const prof=new Float32Array(h);for(let y=0;y<h;y++){let s=0;for(let x=0;x<w;x++)s+=ink[y*w+x];prof[y]=s}
+    comps.push({x0,x1,y0,y1,n})}}
+  /* patří k řádku: střed tahu leží v rámečku a aspoň polovina tahu je uvnitř; čárky řádku nad/pod se vyřadí */
+  const member=new Uint8Array(comps.length);let nm=0,nx=0;
+  for(let k=1;k<comps.length;k++){const q=comps[k];const ch=q.y1-q.y0+1;if(ch<bh*.22||q.n<bh*.3)continue;const cy=(q.y0+q.y1)/2;const ov=Math.max(0,Math.min(q.y1,by1)-Math.max(q.y0,by0))/ch;
+    if(cy>=by0&&cy<=by1&&ov>=.5){member[k]=1;nm++}else nx++}
+  const m2=new Uint8Array(w*h);for(let i=0;i<w*h;i++)if(lab[i]&&member[lab[i]])m2[i]=1;
+  if(window.__lcdbg)window.__lcdbg={w,h,by0,by1,m2:Array.from(m2),ink:Array.from(ink)};
+  /* rámeček přes víc řádků čárek (vyšší než ~1,7 čárky) → počítat po tazích */
+  {const M=comps.filter((q,k)=>k&&member[k]);const hs=M.map(q=>q.y1-q.y0+1).sort((a,b)=>a-b);const Hm=hs.length?hs[Math.floor(hs.length/2)]:bh;
+   if(M.length&&bh>Hm*1.7){const ws=M.map(q=>q.x1-q.x0+1).sort((a,b)=>a-b);const mw=ws[Math.floor(ws.length/3)]||1;let total=0;const pts=[];
+     M.forEach(q=>{const k=Math.max(1,Math.round((q.x1-q.x0+1)/Math.max(mw*1.6,1)));total+=k;for(let t=0;t<k;t++){const cx=q.x0+(q.x1-q.x0+1)*(t+.5)/k;pts.push([+((sx+cx/w*sw)/W).toFixed(4),+((sy+(q.y1+1)/h*sh)/Hh).toFixed(4)])}});
+     log('INFO','v telefonu: víc řádků – po tazích',{tahu:M.length,vysledek:total});return{c:total,pts,unsure:true}}}
+  /* pásy uvnitř rámečku (víc řádků čárek v jednom rámečku) */
+  const prof=new Float32Array(h);for(let y=0;y<h;y++){let s=0;for(let x=0;x<w;x++)s+=m2[y*w+x];prof[y]=s}
   const sm=new Float32Array(h);for(let y=0;y<h;y++){let s=0,n=0;for(let k=-3;k<=3;k++)if(y+k>=0&&y+k<h){s+=prof[y+k];n++}sm[y]=s/n}
-  const pmax=Math.max(...sm);let bands=[];let st=-1;for(let y=0;y<=h;y++){const on=y<h&&sm[y]>pmax*.22;if(on&&st<0)st=y;if(!on&&st>=0){bands.push([st,y]);st=-1}}
+  const pmax=Math.max(...sm,1);let bands=[];let st=-1;for(let y=0;y<=h;y++){const on=y<h&&sm[y]>pmax*.22;if(on&&st<0)st=y;if(!on&&st>=0){bands.push([st,y]);st=-1}}
   const bigH=Math.max(...bands.map(b=>b[1]-b[0]),1);bands=bands.filter(b=>b[1]-b[0]>=bigH*.35);
-  /* spojit pásy, mezi kterými je jen malá mezera */
-  const B=[];for(const b of bands){const l=B[B.length-1];if(l&&b[0]-l[1]<bigH*.12)l[1]=b[1];else B.push(b.slice())}if(!B.length)B.push([0,h]);
+  const B=[];for(const b of bands){const l=B[B.length-1];if(l&&b[0]-l[1]<bigH*.12)l[1]=b[1];else B.push(b.slice())}if(!B.length)B.push([by0,by1]);
+  const runsAt=y=>{const R=[];let s=-1;for(let x=0;x<w;x++){const v=m2[y*w+x]||(y>0&&m2[(y-1)*w+x])||(y<h-1&&m2[(y+1)*w+x]);if(v&&s<0)s=x;if(!v&&s>=0){R.push([s,x]);s=-1}}if(s>=0)R.push([s,w]);
+    const M=[];for(const r of R){if(M.length&&r[0]-M[M.length-1][1]<2)M[M.length-1][1]=r[1];else M.push(r)}return M};
   let total=0,pts=[],unsure=false;const dbg=[];
-  for(const [b0,b1] of B){const bh=b1-b0;const lines=[];for(let k=0;k<10;k++){const y=Math.round(b0+(.3+k*.05)*bh);if(y>=0&&y<h)lines.push({y,R:runsAt(y)})}
+  for(const [b0,b1] of B){const bhh=b1-b0;const lines=[];for(let k=0;k<10;k++){const y=Math.round(b0+(.3+k*.05)*bhh);if(y>=0&&y<h)lines.push({y,R:runsAt(y)})}
     if(!lines.length)continue;const counts=lines.map(l=>l.R.length).sort((a,b)=>a-b);const med=counts[Math.floor(counts.length/2)];
-    const best=lines.filter(l=>l.R.length===med).sort((a,b)=>Math.abs(a.y-(b0+bh*.52))-Math.abs(b.y-(b0+bh*.52)))[0]||lines[0];
-    best.R.forEach(r=>{let cx=(r[0]+r[1])/2,y=best.y;const lim=Math.min(h-1,b1+Math.round(bh*.25));for(;y<lim;){let got=0;for(let k=1;k<=4&&y+k<=lim;k++){let s=0,n=0;for(let x=Math.max(0,Math.round(cx)-4);x<=Math.min(w-1,Math.round(cx)+4);x++)if(ink[(y+k)*w+x]){s+=x;n++}if(n){cx=s/n;y+=k;got=1;break}}if(!got)break}
+    const best=lines.filter(l=>l.R.length===med).sort((a,b)=>Math.abs(a.y-(b0+bhh*.52))-Math.abs(b.y-(b0+bhh*.52)))[0]||lines[0];
+    best.R.forEach(r=>{let cx=(r[0]+r[1])/2,y=best.y;for(;y<h-1;){let got=0;for(let k=1;k<=4&&y+k<h;k++){let s=0,n=0;for(let x=Math.max(0,Math.round(cx)-4);x<=Math.min(w-1,Math.round(cx)+4);x++)if(m2[(y+k)*w+x]){s+=x;n++}if(n){cx=s/n;y+=k;got=1;break}}if(!got)break}
       pts.push([+((sx+cx/w*sw)/W).toFixed(4),+((sy+y/h*sh)/Hh).toFixed(4)])});
     total+=med;if(counts[counts.length-2]-counts[1]>2)unsure=true;dbg.push(lines.map(l=>l.R.length))}
-  log('INFO','v telefonu: řezy',{pasy:B.length,pocty:dbg,vysledek:total});
+  log('INFO','v telefonu',{tahy_radku:nm,vyrazeno_z_vedlejsich:nx,pasy:B.length,rezy:dbg,vysledek:total});
   return{c:total,pts,unsure:unsure||B.length>1}}
 try{window.uctenkyLocalCount=localCount}catch(e){}
 async function localCountRow(r,x){const p=(r.photos||[])[x.ph||0];if(!p||!x.box)throw{code:'empty',msg:'Řádek není označený na fotce'};const rec=await getOne('photos',p.id);const img=await imgFromBlob(rec.blob);return localCount(img,x.box,x.pbox)}
